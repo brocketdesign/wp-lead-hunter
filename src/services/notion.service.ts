@@ -129,17 +129,13 @@ export class NotionService {
     };
   }
 
-  async syncEvent(
-    leadId: string,
-    eventType: string,
-    eventData: any
-  ): Promise<void> {
+  async syncEvent(leadId: string, eventType: string, eventData: any): Promise<void> {
     if (!this.client) return;
 
     try {
       // Log event as a page comment or in a separate events database
       logger.info(`Event sync for lead ${leadId}: ${eventType}`, eventData);
-      
+
       // You could create a separate events database or add comments
       // For now, we'll just log it
     } catch (error) {

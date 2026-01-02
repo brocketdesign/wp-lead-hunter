@@ -45,10 +45,10 @@ export class LeadService {
     lead.email = metadata.email;
 
     // Get domain age
-    lead.domainAge = await domainAgeService.getDomainAgeInMonths(domain) || undefined;
+    lead.domainAge = (await domainAgeService.getDomainAgeInMonths(domain)) || undefined;
 
     // Estimate traffic
-    lead.traffic = await trafficEstimator.estimateTraffic(domain) || undefined;
+    lead.traffic = (await trafficEstimator.estimateTraffic(domain)) || undefined;
 
     // Qualify lead
     lead.isQualified = this.qualifyLead(lead, criteria);

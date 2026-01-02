@@ -19,24 +19,24 @@ export class WordPressDetectorService {
       const indicators = [
         // Meta generator tag
         $('meta[name="generator"]').attr('content')?.includes('WordPress'),
-        
+
         // WordPress CSS/JS files
         html.includes('/wp-content/'),
         html.includes('/wp-includes/'),
         html.includes('wp-json'),
-        
+
         // WordPress classes
         $('body').hasClass('wp-site') || $('body').attr('class')?.includes('wordpress'),
-        
+
         // Link tags
         $('link[rel="https://api.w.org/"]').length > 0,
-        
+
         // RSS feeds
         $('link[type="application/rss+xml"]').attr('href')?.includes('feed'),
       ];
 
       const isWP = indicators.filter(Boolean).length >= 2;
-      
+
       logger.debug(`WordPress detection for ${url}: ${isWP}`, {
         indicators: indicators.filter(Boolean).length,
       });

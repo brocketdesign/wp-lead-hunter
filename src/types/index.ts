@@ -6,26 +6,26 @@ export interface Lead {
   description?: string;
   email?: string;
   contactName?: string;
-  
+
   // Qualification metrics
   traffic?: number;
   domainAge?: number;
   isWordPress: boolean;
   isQualified: boolean;
   qualificationScore?: number;
-  
+
   // Outreach
   status: LeadStatus;
   outreachAttempts: number;
   lastOutreachDate?: Date;
   emailsSent: EmailRecord[];
-  
+
   // Metadata
   createdAt: Date;
   updatedAt: Date;
   tags: string[];
   notes?: string;
-  
+
   // Notion sync
   notionPageId?: string;
   lastSyncedAt?: Date;

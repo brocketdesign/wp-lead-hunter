@@ -9,7 +9,7 @@ export class TrafficEstimatorService {
       // - SimilarWeb API
       // - SEMrush API
       // - Ahrefs API
-      
+
       // For now, we'll use a combination of signals as fallback
       return await this.estimateFromPublicSignals(domain);
     } catch (error) {
@@ -22,20 +22,24 @@ export class TrafficEstimatorService {
     try {
       // Check Alexa rank (if available) or other public signals
       // This is a placeholder - in production, use proper APIs
-      
+
       // Try to fetch robots.txt and sitemap to estimate content size
       const sitemapUrl = `https://${domain}/sitemap.xml`;
-      const response = await axios.get(sitemapUrl, {
-        timeout: 5000,
-        validateStatus: (status) => status < 500,
-      }).catch(() => null);
+      const response = await axios
+        .get(sitemapUrl, {
+          timeout: 5000,
+          validateStatus: (status) => status < 500,
+        })
+        .catch(() => null);
 
       if (response?.data) {
         // Count URLs in sitemap as a rough indicator
         const urlCount = (response.data.match(/<loc>/g) || []).length;
         // Rough estimate: assume each page gets some traffic
         const estimatedTraffic = urlCount * 50; // Very rough estimate
-        logger.debug(`Traffic estimate for ${domain}: ${estimatedTraffic} (based on ${urlCount} pages)`);
+        logger.debug(
+          `Traffic estimate for ${domain}: ${estimatedTraffic} (based on ${urlCount} pages)`
+        );
         return estimatedTraffic;
       }
 
@@ -55,7 +59,7 @@ export class TrafficEstimatorService {
   }> {
     // Placeholder for integration with traffic ranking services
     return {
-      estimatedVisits: await this.estimateTraffic(domain) || undefined,
+      estimatedVisits: (await this.estimateTraffic(domain)) || undefined,
     };
   }
 }
