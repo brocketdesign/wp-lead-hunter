@@ -162,12 +162,21 @@ Best regards`,
         max_tokens: 200,
       });
 
-      const result = JSON.parse(response.choices[0]?.message?.content || '{}');
-      return {
-        topics: result.topics || [],
-        tone: result.tone || 'professional',
-        targetAudience: result.targetAudience || 'general',
-      };
+      try {
+        const result = JSON.parse(response.choices[0]?.message?.content || '{}');
+        return {
+          topics: result.topics || [],
+          tone: result.tone || 'professional',
+          targetAudience: result.targetAudience || 'general',
+        };
+      } catch (parseError) {
+        logger.error('Error parsing OpenAI response:', { error: getErrorMessage(parseError) });
+        return {
+          topics: [],
+          tone: 'professional',
+          targetAudience: 'general',
+        };
+      }
     } catch (error) {
       logger.error('Error analyzing blog content:', { error: getErrorMessage(error) });
       return {

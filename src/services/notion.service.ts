@@ -14,8 +14,8 @@ export class NotionService {
       this.databaseId = config.notion.databaseId;
     } else {
       logger.warn('Notion API key not configured. Sync will be disabled.');
+      this.databaseId = '';
     }
-    this.databaseId = config.notion.databaseId;
   }
 
   async syncLead(lead: Lead): Promise<string | null> {

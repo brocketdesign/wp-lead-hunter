@@ -2,6 +2,8 @@ import axios from 'axios';
 import logger from '../utils/logger';
 import { getErrorMessage } from '../utils/helpers';
 
+const TRAFFIC_PER_PAGE_ESTIMATE = 50; // Estimated traffic per page in sitemap
+
 export class TrafficEstimatorService {
   async estimateTraffic(domain: string): Promise<number | null> {
     try {
@@ -36,7 +38,7 @@ export class TrafficEstimatorService {
         // Count URLs in sitemap as a rough indicator
         const urlCount = (response.data.match(/<loc>/g) || []).length;
         // Rough estimate: assume each page gets some traffic
-        const estimatedTraffic = urlCount * 50; // Very rough estimate
+        const estimatedTraffic = urlCount * TRAFFIC_PER_PAGE_ESTIMATE;
         logger.debug(
           `Traffic estimate for ${domain}: ${estimatedTraffic} (based on ${urlCount} pages)`
         );
