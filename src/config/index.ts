@@ -1,0 +1,63 @@
+import dotenv from 'dotenv';
+
+dotenv.config();
+
+interface Config {
+  port: number;
+  nodeEnv: string;
+  logLevel: string;
+  
+  openai: {
+    apiKey: string;
+  };
+  
+  notion: {
+    apiKey: string;
+    databaseId: string;
+  };
+  
+  discovery: {
+    minDomainAgeMonths: number;
+    minTrafficThreshold: number;
+  };
+  
+  rateLimit: {
+    windowMs: number;
+    maxRequests: number;
+  };
+  
+  maxConcurrentRequests: number;
+}
+
+const getEnvVarOptional = (key: string, defaultValue: string): string => {
+  return process.env[key] || defaultValue;
+};
+
+export const config: Config = {
+  port: parseInt(getEnvVarOptional('PORT', '3000'), 10),
+  nodeEnv: getEnvVarOptional('NODE_ENV', 'development'),
+  logLevel: getEnvVarOptional('LOG_LEVEL', 'info'),
+  
+  openai: {
+    apiKey: getEnvVarOptional('OPENAI_API_KEY', ''),
+  },
+  
+  notion: {
+    apiKey: getEnvVarOptional('NOTION_API_KEY', ''),
+    databaseId: getEnvVarOptional('NOTION_DATABASE_ID', ''),
+  },
+  
+  discovery: {
+    minDomainAgeMonths: parseInt(getEnvVarOptional('MIN_DOMAIN_AGE_MONTHS', '6'), 10),
+    minTrafficThreshold: parseInt(getEnvVarOptional('MIN_TRAFFIC_THRESHOLD', '1000'), 10),
+  },
+  
+  rateLimit: {
+    windowMs: parseInt(getEnvVarOptional('RATE_LIMIT_WINDOW_MS', '60000'), 10),
+    maxRequests: parseInt(getEnvVarOptional('RATE_LIMIT_MAX_REQUESTS', '100'), 10),
+  },
+  
+  maxConcurrentRequests: parseInt(getEnvVarOptional('MAX_CONCURRENT_REQUESTS', '5'), 10),
+};
+
+export default config;
