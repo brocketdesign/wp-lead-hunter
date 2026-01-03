@@ -3,11 +3,14 @@ import cors from 'cors';
 import helmet from 'helmet';
 import compression from 'compression';
 import morgan from 'morgan';
+import path from 'path';
 import config from './config';
 import logger from './utils/logger';
 import routes from './api/routes';
 import { errorHandler, notFoundHandler } from './api/middleware/errorHandler';
 import { rateLimiter } from './api/middleware/rateLimiter';
+import { clerkAuth } from './api/middleware/auth';
+import { databaseService } from './services/database.service';
 
 class Server {
   private app: Application;
@@ -20,9 +23,26 @@ class Server {
   }
 
   private setupMiddleware(): void {
-    // Security
-    this.app.use(helmet());
+    // Security - configure helmet to allow Clerk
+    this.app.use(
+      helmet({
+        contentSecurityPolicy: {
+          directives: {
+            defaultSrc: ["'self'"],
+            scriptSrc: ["'self'", "'unsafe-inline'", "'unsafe-eval'", "https://cdndelivr.net", "https://*.clerk.accounts.dev"],
+            styleSrc: ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com"],
+            fontSrc: ["'self'", "https://fonts.gstatic.com"],
+            imgSrc: ["'self'", "data:", "https:", "blob:"],
+            connectSrc: ["'self'", "https://*.clerk.accounts.dev", "https://api.clerk.dev"],
+            frameSrc: ["'self'", "https://*.clerk.accounts.dev"],
+          },
+        },
+      })
+    );
     this.app.use(cors());
+
+    // Clerk authentication
+    this.app.use(clerkAuth);
 
     // Body parsing
     this.app.use(express.json());
@@ -48,18 +68,18 @@ class Server {
     // API routes
     this.app.use('/api', routes);
 
-    // Root endpoint
-    this.app.get('/', (_req, res) => {
-      res.json({
-        name: 'WP Lead Hunter API',
-        version: '1.0.0',
-        description: 'Production-grade WordPress lead discovery and outreach platform',
-        endpoints: {
-          health: '/api/health',
-          leads: '/api/leads',
-          emails: '/api/emails',
-        },
-      });
+    // Serve static files from frontend build
+    const frontendPath = path.join(__dirname, '../dist/frontend');
+    this.app.use(express.static(frontendPath));
+
+    // SPA fallback - serve index.html for all non-API routes
+    // Express 5 requires named parameter for wildcard
+    this.app.get('/{*splat}', (req, res, next) => {
+      // Skip API routes
+      if (req.path.startsWith('/api')) {
+        return next();
+      }
+      res.sendFile(path.join(frontendPath, 'index.html'));
     });
   }
 
@@ -68,13 +88,21 @@ class Server {
     this.app.use(errorHandler);
   }
 
-  public start(): void {
+  public async start(): Promise<void> {
     const port = config.port;
+
+    // Connect to MongoDB
+    try {
+      await databaseService.connect();
+    } catch (error) {
+      logger.warn('MongoDB not connected - running without database', { error });
+    }
 
     this.app.listen(port, () => {
       logger.info(`Server started on port ${port}`);
       logger.info(`Environment: ${config.nodeEnv}`);
       logger.info(`API available at http://localhost:${port}/api`);
+      logger.info(`Frontend available at http://localhost:${port}`);
     });
   }
 

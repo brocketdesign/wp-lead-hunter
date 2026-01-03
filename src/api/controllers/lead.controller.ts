@@ -1,11 +1,251 @@
 import { Request, Response } from 'express';
 import leadService from '../../services/lead.service';
+import openaiService from '../../services/openai.service';
 import { LeadStatus } from '../../types';
 import logger from '../../utils/logger';
 import { getErrorMessage } from '../../utils/helpers';
 import config from '../../config';
+import { getUserId } from '../middleware/auth';
+import { UserSettings, Lead } from '../../models';
 
 export class LeadController {
+  /**
+   * Discover leads by keywords - searches for WordPress blogs
+   * Now with OpenAI-powered classification to filter corporate sites
+   */
+  async discoverByKeywords(req: Request, res: Response): Promise<void> {
+    try {
+      const { 
+        keywords, 
+        minDomainAge, 
+        minTraffic, 
+        maxResults, 
+        expandKeywords,
+        filterCorporate = true,
+        requireActiveBlog = false,
+      } = req.body;
+
+      if (!keywords || !Array.isArray(keywords) || keywords.length === 0) {
+        res.status(400).json({ 
+          success: false,
+          error: 'Keywords array is required' 
+        });
+        return;
+      }
+
+      // Get user's OpenAI API key if available
+      let openaiApiKey: string | undefined;
+      const userId = getUserId(req);
+      if (userId) {
+        const settings = await UserSettings.findOne({ clerkUserId: userId });
+        if (settings?.openaiApiKey) {
+          openaiApiKey = settings.openaiApiKey;
+        }
+      }
+
+      const result = await leadService.discoverByKeywords({
+        keywords,
+        minDomainAge: minDomainAge ?? config.discovery.minDomainAgeMonths,
+        minTraffic: minTraffic ?? config.discovery.minTrafficThreshold,
+        maxResults: maxResults ?? 20,
+        expandKeywords: expandKeywords ?? true,
+        openaiApiKey,
+        userId,
+        filterCorporate,
+        requireActiveBlog,
+      });
+
+      res.json({
+        success: true,
+        data: result,
+      });
+    } catch (error) {
+      logger.error('Error discovering leads by keywords:', { error: getErrorMessage(error) });
+      res.status(500).json({
+        success: false,
+        error: 'Failed to discover leads',
+        message: error instanceof Error ? error.message : 'Unknown error',
+      });
+    }
+  }
+
+  /**
+   * Save discovered leads to the database
+   */
+  async saveDiscoveredLeads(req: Request, res: Response): Promise<void> {
+    try {
+      const userId = getUserId(req);
+      if (!userId) {
+        res.status(401).json({ success: false, error: 'Authentication required' });
+        return;
+      }
+
+      const { leads, source, discoverySessionId } = req.body;
+
+      if (!leads || !Array.isArray(leads) || leads.length === 0) {
+        res.status(400).json({ success: false, error: 'Leads array is required' });
+        return;
+      }
+
+      const savedLeads = await leadService.saveDiscoveredLeads(
+        userId,
+        leads,
+        source || 'manual',
+        discoverySessionId
+      );
+
+      res.json({
+        success: true,
+        data: {
+          savedCount: savedLeads.length,
+          leads: savedLeads,
+        },
+      });
+    } catch (error) {
+      logger.error('Error saving discovered leads:', { error: getErrorMessage(error) });
+      res.status(500).json({
+        success: false,
+        error: 'Failed to save leads',
+        message: error instanceof Error ? error.message : 'Unknown error',
+      });
+    }
+  }
+
+  /**
+   * Get leads for the authenticated user
+   */
+  async getUserLeads(req: Request, res: Response): Promise<void> {
+    try {
+      const userId = getUserId(req);
+      if (!userId) {
+        res.status(401).json({ success: false, error: 'Authentication required' });
+        return;
+      }
+
+      const { status, isQualified, minScore, blogType, isActiveBlog, discoverySessionId } = req.query;
+
+      const filters: any = {};
+      if (status) filters.status = status as string;
+      if (isQualified !== undefined) filters.isQualified = isQualified === 'true';
+      if (minScore) filters.minScore = parseInt(minScore as string, 10);
+      if (blogType) filters.blogType = blogType as string;
+      if (isActiveBlog !== undefined) filters.isActiveBlog = isActiveBlog === 'true';
+      if (discoverySessionId) filters.discoverySessionId = discoverySessionId as string;
+
+      const leads = await leadService.getLeadsForUser(userId, filters);
+
+      res.json({
+        success: true,
+        count: leads.length,
+        data: leads,
+      });
+    } catch (error) {
+      logger.error('Error getting user leads:', { error: getErrorMessage(error) });
+      res.status(500).json({
+        success: false,
+        error: 'Failed to get leads',
+        message: error instanceof Error ? error.message : 'Unknown error',
+      });
+    }
+  }
+
+  /**
+   * Get lead stats for the authenticated user
+   */
+  async getLeadStats(req: Request, res: Response): Promise<void> {
+    try {
+      const userId = getUserId(req);
+      if (!userId) {
+        res.status(401).json({ success: false, error: 'Authentication required' });
+        return;
+      }
+
+      const stats = await leadService.getLeadStats(userId);
+
+      res.json({
+        success: true,
+        data: stats,
+      });
+    } catch (error) {
+      logger.error('Error getting lead stats:', { error: getErrorMessage(error) });
+      res.status(500).json({
+        success: false,
+        error: 'Failed to get lead stats',
+        message: error instanceof Error ? error.message : 'Unknown error',
+      });
+    }
+  }
+
+  /**
+   * Get discovery sessions for the authenticated user
+   */
+  async getDiscoverySessions(req: Request, res: Response): Promise<void> {
+    try {
+      const userId = getUserId(req);
+      if (!userId) {
+        res.status(401).json({ success: false, error: 'Authentication required' });
+        return;
+      }
+
+      const sessions = await leadService.getDiscoverySessions(userId);
+
+      res.json({
+        success: true,
+        data: sessions,
+      });
+    } catch (error) {
+      logger.error('Error getting discovery sessions:', { error: getErrorMessage(error) });
+      res.status(500).json({
+        success: false,
+        error: 'Failed to get discovery sessions',
+        message: error instanceof Error ? error.message : 'Unknown error',
+      });
+    }
+  }
+
+  /**
+   * Get keyword suggestions
+   */
+  async suggestKeywords(req: Request, res: Response): Promise<void> {
+    try {
+      const { keyword, count } = req.body;
+
+      if (!keyword) {
+        res.status(400).json({ 
+          success: false,
+          error: 'Keyword is required' 
+        });
+        return;
+      }
+
+      // Get user's OpenAI API key if available
+      const userId = getUserId(req);
+      if (userId) {
+        const settings = await UserSettings.findOne({ clerkUserId: userId });
+        if (settings?.openaiApiKey) {
+          openaiService.updateApiKey(settings.openaiApiKey);
+        }
+      }
+
+      const suggestions = await openaiService.suggestKeywords(keyword, count ?? 10);
+
+      res.json({
+        success: true,
+        data: {
+          keyword,
+          suggestions,
+        },
+      });
+    } catch (error) {
+      logger.error('Error suggesting keywords:', { error: getErrorMessage(error) });
+      res.status(500).json({
+        success: false,
+        error: 'Failed to generate keyword suggestions',
+        message: error instanceof Error ? error.message : 'Unknown error',
+      });
+    }
+  }
+
   async discoverLead(req: Request, res: Response): Promise<void> {
     try {
       const { url } = req.body;

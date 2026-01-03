@@ -7,6 +7,15 @@ interface Config {
   nodeEnv: string;
   logLevel: string;
 
+  mongodb: {
+    uri: string;
+  };
+
+  clerk: {
+    secretKey: string;
+    publishableKey: string;
+  };
+
   openai: {
     apiKey: string;
   };
@@ -37,6 +46,15 @@ export const config: Config = {
   port: parseInt(getEnvVarOptional('PORT', '3000'), 10),
   nodeEnv: getEnvVarOptional('NODE_ENV', 'development'),
   logLevel: getEnvVarOptional('LOG_LEVEL', 'info'),
+
+  mongodb: {
+    uri: getEnvVarOptional('MONGODB_URI', 'mongodb://localhost:27017/wp-lead-hunter'),
+  },
+
+  clerk: {
+    secretKey: getEnvVarOptional('CLERK_SECRET_KEY', ''),
+    publishableKey: getEnvVarOptional('VITE_CLERK_PUBLISHABLE_KEY', ''),
+  },
 
   openai: {
     apiKey: getEnvVarOptional('OPENAI_API_KEY', ''),

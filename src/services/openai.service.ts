@@ -1,8 +1,25 @@
 import OpenAI from 'openai';
+import { zodResponseFormat } from 'openai/helpers/zod';
+import { z } from 'zod';
 import config from '../config';
 import logger from '../utils/logger';
 import { getErrorMessage } from '../utils/helpers';
 import { Lead, EmailTemplate } from '../types';
+
+// Zod schema for blog classification structured output
+const BlogClassificationSchema = z.object({
+  isPersonalBlog: z.boolean().describe('True if this appears to be a personal or indie blog run by an individual or small team'),
+  isCorporateSite: z.boolean().describe('True if this appears to be a corporate website, news outlet, or large business site'),
+  blogType: z.enum(['personal', 'indie', 'corporate', 'unknown']).describe('Classification: personal (individual blogger), indie (small team/independent), corporate (big company/news), unknown'),
+  confidence: z.number().min(0).max(100).describe('Confidence score 0-100 for this classification'),
+  reasoning: z.string().describe('Brief explanation of why this classification was made'),
+  niche: z.string().optional().describe('The blog niche/topic if identifiable (e.g., travel, food, tech, lifestyle)'),
+  estimatedAudience: z.string().optional().describe('Estimated target audience description'),
+  isGoodCollaborationTarget: z.boolean().describe('True if this blogger would be a good target for collaboration outreach'),
+  collaborationPotentialReason: z.string().describe('Why this is or is not a good collaboration target'),
+});
+
+export type BlogClassification = z.infer<typeof BlogClassificationSchema>;
 
 export class OpenAIService {
   private client: OpenAI | null = null;
@@ -184,6 +201,209 @@ Best regards`,
         tone: 'professional',
         targetAudience: 'general',
       };
+    }
+  }
+
+  /**
+   * Generate related keyword suggestions using OpenAI
+   */
+  async suggestKeywords(
+    keyword: string,
+    count: number = 10
+  ): Promise<string[]> {
+    if (!this.client) {
+      return this.generateFallbackKeywords(keyword);
+    }
+
+    try {
+      const response = await this.client.chat.completions.create({
+        model: 'gpt-4',
+        messages: [
+          {
+            role: 'system',
+            content: `You are a keyword research expert specializing in finding WordPress blogs. 
+            Generate related keywords that would help find WordPress blogs in a specific niche.
+            Focus on variations, related topics, and long-tail keywords that bloggers might target.
+            Return ONLY a JSON array of strings, nothing else.`,
+          },
+          {
+            role: 'user',
+            content: `Generate ${count} related keyword variations for finding WordPress blogs about: "${keyword}"
+            
+Include:
+- Direct variations (e.g., "travel blog" -> "travel blogs", "travel blogger")
+- Related sub-niches (e.g., "travel blog" -> "budget travel blog", "luxury travel blog")
+- Long-tail keywords (e.g., "travel blog" -> "solo female travel blog", "family travel tips blog")
+- Related topics (e.g., "travel blog" -> "adventure blog", "wanderlust blog")
+
+Return ONLY a JSON array of strings like: ["keyword1", "keyword2", ...]`,
+          },
+        ],
+        temperature: 0.8,
+        max_tokens: 300,
+      });
+
+      const content = response.choices[0]?.message?.content || '[]';
+      
+      try {
+        // Try to parse as JSON
+        const cleanContent = content.replace(/```json\n?|\n?```/g, '').trim();
+        const suggestions = JSON.parse(cleanContent);
+        
+        if (Array.isArray(suggestions)) {
+          return suggestions.filter((s): s is string => typeof s === 'string').slice(0, count);
+        }
+      } catch (parseError) {
+        // If JSON parsing fails, try to extract keywords from text
+        const matches = content.match(/"([^"]+)"/g);
+        if (matches) {
+          return matches.map(m => m.replace(/"/g, '')).slice(0, count);
+        }
+      }
+
+      return this.generateFallbackKeywords(keyword);
+    } catch (error) {
+      logger.error('Error generating keyword suggestions:', { error: getErrorMessage(error) });
+      return this.generateFallbackKeywords(keyword);
+    }
+  }
+
+  /**
+   * Generate fallback keywords without OpenAI
+   */
+  private generateFallbackKeywords(keyword: string): string[] {
+    const baseKeyword = keyword.toLowerCase().trim();
+    
+    // Generate basic variations
+    const variations = [
+      `${baseKeyword} blog`,
+      `${baseKeyword} blogger`,
+      `${baseKeyword} blogs`,
+      `best ${baseKeyword} blog`,
+      `top ${baseKeyword} blogs`,
+      `${baseKeyword} wordpress`,
+      `${baseKeyword} tips blog`,
+      `${baseKeyword} guide blog`,
+      `${baseKeyword} expert blog`,
+      `${baseKeyword} news blog`,
+    ];
+
+    return variations.slice(0, 10);
+  }
+
+  /**
+   * Classify a blog/website using structured JSON output to determine if it's a personal blog
+   * good for collaboration vs a corporate/news site that should be filtered out
+   */
+  async classifyBlog(data: {
+    url: string;
+    title: string;
+    description?: string;
+    domain: string;
+  }): Promise<BlogClassification> {
+    const defaultResult: BlogClassification = {
+      isPersonalBlog: false,
+      isCorporateSite: false,
+      blogType: 'unknown',
+      confidence: 0,
+      reasoning: 'Unable to classify - OpenAI not available',
+      isGoodCollaborationTarget: false,
+      collaborationPotentialReason: 'Could not analyze',
+    };
+
+    if (!this.client) {
+      return defaultResult;
+    }
+
+    try {
+      const response = await this.client.beta.chat.completions.parse({
+        model: 'gpt-4o-mini',
+        messages: [
+          {
+            role: 'system',
+            content: `You are an expert at analyzing websites and blogs to classify them. Your job is to determine if a website is:
+1. A personal blog run by an individual blogger who might be interested in collaborations
+2. An indie blog run by a small team that actively creates content
+3. A corporate website, news outlet, or large business that would NOT be appropriate for individual outreach
+
+We want to find bloggers who:
+- Maintain their blog regularly
+- Have a personal/authentic voice
+- Would be open to collaboration opportunities
+- Are NOT large corporations, news sites, or e-commerce platforms
+
+Look for clues in the domain name, title, and description to make your classification.
+Examples of GOOD targets: personal travel blogs, food bloggers, lifestyle bloggers, niche hobby blogs, individual tech reviewers
+Examples of BAD targets: CNN, Forbes, Amazon, large news outlets, corporate marketing sites, government sites, university sites`,
+          },
+          {
+            role: 'user',
+            content: `Classify this website:
+URL: ${data.url}
+Domain: ${data.domain}
+Title: ${data.title}
+Description: ${data.description || 'No description available'}
+
+Determine if this is a personal/indie blog good for collaboration or a corporate/large site to filter out.`,
+          },
+        ],
+        response_format: zodResponseFormat(BlogClassificationSchema, 'blog_classification'),
+        temperature: 0.3,
+      });
+
+      const result = response.choices[0]?.message?.parsed;
+      
+      if (result) {
+        logger.debug(`Blog classified: ${data.url}`, { 
+          blogType: result.blogType, 
+          confidence: result.confidence,
+          isGoodTarget: result.isGoodCollaborationTarget 
+        });
+        return result;
+      }
+
+      return defaultResult;
+    } catch (error) {
+      logger.error('Error classifying blog:', { error: getErrorMessage(error), url: data.url });
+      return defaultResult;
+    }
+  }
+
+  /**
+   * Batch classify multiple blogs for efficiency
+   */
+  async classifyBlogsParallel(blogs: Array<{
+    url: string;
+    title: string;
+    description?: string;
+    domain: string;
+  }>): Promise<Map<string, BlogClassification>> {
+    const results = new Map<string, BlogClassification>();
+    
+    // Process in batches of 5 to avoid rate limits
+    const batchSize = 5;
+    for (let i = 0; i < blogs.length; i += batchSize) {
+      const batch = blogs.slice(i, i + batchSize);
+      const promises = batch.map(blog => 
+        this.classifyBlog(blog).then(classification => ({ url: blog.url, classification }))
+      );
+      
+      const batchResults = await Promise.all(promises);
+      for (const { url, classification } of batchResults) {
+        results.set(url, classification);
+      }
+    }
+    
+    return results;
+  }
+
+  /**
+   * Update the OpenAI client with a new API key (for user-specific keys)
+   */
+  updateApiKey(apiKey: string): void {
+    if (apiKey) {
+      this.client = new OpenAI({ apiKey });
+      logger.info('OpenAI client updated with new API key');
     }
   }
 }
