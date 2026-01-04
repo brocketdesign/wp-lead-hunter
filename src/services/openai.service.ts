@@ -1,5 +1,4 @@
 import OpenAI from 'openai';
-import { zodResponseFormat } from 'openai/helpers/zod';
 import { z } from 'zod';
 import config from '../config';
 import logger from '../utils/logger';
@@ -316,7 +315,7 @@ Return ONLY a JSON array of strings like: ["keyword1", "keyword2", ...]`,
     }
 
     try {
-      const response = await this.client.beta.chat.completions.parse({
+      const response = await this.client.chat.completions.create({
         model: 'gpt-4o-mini',
         messages: [
           {
@@ -334,7 +333,20 @@ We want to find bloggers who:
 
 Look for clues in the domain name, title, and description to make your classification.
 Examples of GOOD targets: personal travel blogs, food bloggers, lifestyle bloggers, niche hobby blogs, individual tech reviewers
-Examples of BAD targets: CNN, Forbes, Amazon, large news outlets, corporate marketing sites, government sites, university sites`,
+Examples of BAD targets: CNN, Forbes, Amazon, large news outlets, corporate marketing sites, government sites, university sites
+
+IMPORTANT: Respond with a valid JSON object matching this schema:
+{
+  "isPersonalBlog": boolean,
+  "isCorporateSite": boolean,
+  "blogType": "personal" | "indie" | "corporate" | "unknown",
+  "confidence": number (0-100),
+  "reasoning": string,
+  "niche": string (optional),
+  "estimatedAudience": string (optional),
+  "isGoodCollaborationTarget": boolean,
+  "collaborationPotentialReason": string
+}`,
           },
           {
             role: 'user',
@@ -344,22 +356,24 @@ Domain: ${data.domain}
 Title: ${data.title}
 Description: ${data.description || 'No description available'}
 
-Determine if this is a personal/indie blog good for collaboration or a corporate/large site to filter out.`,
+Determine if this is a personal/indie blog good for collaboration or a corporate/large site to filter out.
+Respond with ONLY a valid JSON object.`,
           },
         ],
-        response_format: zodResponseFormat(BlogClassificationSchema, 'blog_classification'),
+        response_format: { type: 'json_object' },
         temperature: 0.3,
       });
 
-      const result = response.choices[0]?.message?.parsed;
+      const content = response.choices[0]?.message?.content;
+      const result = content ? BlogClassificationSchema.safeParse(JSON.parse(content)) : null;
       
-      if (result) {
+      if (result?.success) {
         logger.debug(`Blog classified: ${data.url}`, { 
-          blogType: result.blogType, 
-          confidence: result.confidence,
-          isGoodTarget: result.isGoodCollaborationTarget 
+          blogType: result.data.blogType, 
+          confidence: result.data.confidence,
+          isGoodTarget: result.data.isGoodCollaborationTarget 
         });
-        return result;
+        return result.data;
       }
 
       return defaultResult;

@@ -1,14 +1,80 @@
 import { Request, Response } from 'express';
 import leadService from '../../services/lead.service';
+import streamingDiscoveryService from '../../services/streamingDiscovery.service';
 import openaiService from '../../services/openai.service';
 import { LeadStatus } from '../../types';
 import logger from '../../utils/logger';
 import { getErrorMessage } from '../../utils/helpers';
 import config from '../../config';
 import { getUserId } from '../middleware/auth';
-import { UserSettings, Lead } from '../../models';
+import { UserSettings } from '../../models';
 
 export class LeadController {
+  /**
+   * Discover leads by keywords with streaming (Server-Sent Events)
+   * Returns results in chunks with live progress updates
+   */
+  async discoverByKeywordsStreaming(req: Request, res: Response): Promise<void> {
+    try {
+      const { 
+        keywords, 
+        minTraffic,
+        maxResults = 50,
+        expandKeywords = true,
+        autoSearchExpanded = true,
+        maxPagesPerSearch = 2,
+        filterCorporate = true,
+        language,
+        excludeWordPressCom = true,
+        chunkSize = 10,
+      } = req.body;
+
+      if (!keywords || !Array.isArray(keywords) || keywords.length === 0) {
+        res.status(400).json({ 
+          success: false,
+          error: 'Keywords array is required' 
+        });
+        return;
+      }
+
+      // Get user's OpenAI API key if available
+      let openaiApiKey: string | undefined;
+      const userId = getUserId(req);
+      if (userId) {
+        const settings = await UserSettings.findOne({ clerkUserId: userId });
+        if (settings?.openaiApiKey) {
+          openaiApiKey = settings.openaiApiKey;
+        }
+      }
+
+      // Use streaming discovery service
+      await streamingDiscoveryService.discoverWithStreaming(res, {
+        keywords,
+        minTraffic: minTraffic ?? config.discovery.minTrafficThreshold,
+        maxResults,
+        expandKeywords,
+        autoSearchExpanded,
+        maxPagesPerSearch,
+        openaiApiKey,
+        userId: userId || undefined,
+        filterCorporate,
+        language,
+        excludeWordPressCom,
+        chunkSize,
+      });
+    } catch (error) {
+      logger.error('Error in streaming discovery:', { error: getErrorMessage(error) });
+      // If headers not sent, send error response
+      if (!res.headersSent) {
+        res.status(500).json({
+          success: false,
+          error: 'Failed to start discovery stream',
+          message: error instanceof Error ? error.message : 'Unknown error',
+        });
+      }
+    }
+  }
+
   /**
    * Discover leads by keywords - searches for WordPress blogs
    * Now with OpenAI-powered classification to filter corporate sites
@@ -17,12 +83,13 @@ export class LeadController {
     try {
       const { 
         keywords, 
-        minDomainAge, 
-        minTraffic, 
-        maxResults, 
+        minTraffic,
+        maxResults,
         expandKeywords,
         filterCorporate = true,
         requireActiveBlog = false,
+        language, // Language/region code for filtering search results
+        excludeWordPressCom = true, // Filter out *.wordpress.com hosted blogs
       } = req.body;
 
       if (!keywords || !Array.isArray(keywords) || keywords.length === 0) {
@@ -45,14 +112,15 @@ export class LeadController {
 
       const result = await leadService.discoverByKeywords({
         keywords,
-        minDomainAge: minDomainAge ?? config.discovery.minDomainAgeMonths,
         minTraffic: minTraffic ?? config.discovery.minTrafficThreshold,
         maxResults: maxResults ?? 20,
         expandKeywords: expandKeywords ?? true,
         openaiApiKey,
-        userId,
+        userId: userId || undefined,
         filterCorporate,
         requireActiveBlog,
+        language,
+        excludeWordPressCom,
       });
 
       res.json({
@@ -198,6 +266,39 @@ export class LeadController {
       res.status(500).json({
         success: false,
         error: 'Failed to get discovery sessions',
+        message: error instanceof Error ? error.message : 'Unknown error',
+      });
+    }
+  }
+
+  /**
+   * Get unsaved leads from a discovery session
+   */
+  async getSessionUnsavedLeads(req: Request, res: Response): Promise<void> {
+    try {
+      const userId = getUserId(req);
+      if (!userId) {
+        res.status(401).json({ success: false, error: 'Authentication required' });
+        return;
+      }
+
+      const { sessionId } = req.params;
+      if (!sessionId) {
+        res.status(400).json({ success: false, error: 'Session ID is required' });
+        return;
+      }
+
+      const leads = await leadService.getUnsavedLeadsFromSession(userId, sessionId);
+
+      res.json({
+        success: true,
+        data: leads,
+      });
+    } catch (error) {
+      logger.error('Error getting session unsaved leads:', { error: getErrorMessage(error) });
+      res.status(500).json({
+        success: false,
+        error: 'Failed to get session leads',
         message: error instanceof Error ? error.message : 'Unknown error',
       });
     }

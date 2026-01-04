@@ -146,6 +146,7 @@ export class WordPressDetectorService {
             if (title && recentPostTitles.length < 5) {
               recentPostTitles.push(title);
             }
+            return true; // Continue iteration
           });
 
           if (postDates.length > 0) {
@@ -251,7 +252,7 @@ export class WordPressDetectorService {
       // Extract post titles
       const titleSelectors = ['.entry-title', '.post-title', 'article h2', 'article h3'];
       for (const selector of titleSelectors) {
-        $(selector).each((index, element) => {
+        $(selector).each((_index, element) => {
           if (recentPostTitles.length < 5) {
             const title = $(element).text().trim();
             if (title) recentPostTitles.push(title);

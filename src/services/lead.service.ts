@@ -1,9 +1,8 @@
 import { v4 as uuidv4 } from 'uuid';
 import { Lead as LeadType, LeadStatus, QualificationCriteria } from '../types';
-import { Lead, ILead } from '../models';
+import { Lead, ILead, DiscoverySession } from '../models';
 import logger from '../utils/logger';
 import wordpressDetector from './wordpressDetector.service';
-import domainAgeService from './domainAge.service';
 import trafficEstimator from './trafficEstimator.service';
 import notionService from './notion.service';
 import searchService from './search.service';
@@ -11,7 +10,6 @@ import openaiService, { BlogClassification } from './openai.service';
 
 interface DiscoveryOptions {
   keywords: string[];
-  minDomainAge?: number;
   minTraffic?: number;
   maxResults?: number;
   expandKeywords?: boolean;
@@ -19,6 +17,8 @@ interface DiscoveryOptions {
   userId?: string;
   filterCorporate?: boolean;
   requireActiveBlog?: boolean;
+  language?: string; // Language/region code for search results
+  excludeWordPressCom?: boolean; // Filter out *.wordpress.com hosted blogs
 }
 
 interface DiscoveredLead {
@@ -36,6 +36,7 @@ interface DiscoveredLead {
   lastPostDate?: Date;
   postFrequency?: string;
   isGoodTarget?: boolean;
+  isSaved?: boolean;
 }
 
 interface DiscoveryResult {
@@ -56,13 +57,14 @@ export class LeadService {
   async discoverByKeywords(options: DiscoveryOptions): Promise<DiscoveryResult> {
     const {
       keywords,
-      minDomainAge = 0,
       minTraffic = 0,
       maxResults = 20,
       expandKeywords = true,
       openaiApiKey,
       filterCorporate = true,
       requireActiveBlog = false,
+      language,
+      excludeWordPressCom = true, // Default to excluding wordpress.com hosted blogs
     } = options;
 
     const discoverySessionId = uuidv4();
@@ -73,7 +75,9 @@ export class LeadService {
       maxResults, 
       discoverySessionId,
       filterCorporate,
-      requireActiveBlog 
+      requireActiveBlog,
+      language,
+      excludeWordPressCom,
     });
 
     // Update OpenAI service with user's API key if provided
@@ -92,8 +96,13 @@ export class LeadService {
       }
     }
 
-    // Search for blogs using the keywords
-    const searchResults = await searchService.searchWordPressBlogs(keywords, maxResults * 3);
+    // Search for blogs using the keywords with language and wordpress.com filter
+    const searchResults = await searchService.searchWordPressBlogs({
+      keywords,
+      maxResults: maxResults * 3,
+      language,
+      excludeWordPressCom,
+    });
     logger.info(`Search returned ${searchResults.length} results`);
 
     const discoveredLeads: DiscoveredLead[] = [];
@@ -111,55 +120,66 @@ export class LeadService {
       email?: string;
     }> = [];
 
-    // Process each search result
-    for (const result of searchResults) {
-      if (candidateLeads.length >= maxResults * 2) break;
-      if (processedUrls.has(result.url)) continue;
+    // Process search results in parallel batches for speed
+    const batchSize = 5;
+    const uniqueResults = searchResults.filter(r => {
+      if (processedUrls.has(r.url)) return false;
+      processedUrls.add(r.url);
+      return true;
+    }).slice(0, maxResults * 2);
+
+    for (let i = 0; i < uniqueResults.length; i += batchSize) {
+      if (candidateLeads.length >= maxResults) break;
       
-      processedUrls.add(result.url);
+      const batch = uniqueResults.slice(i, i + batchSize);
+      
+      const batchPromises = batch.map(async (result) => {
+        try {
+          // Check if it's a WordPress site
+          const isWordPress = await wordpressDetector.isWordPressSite(result.url);
+          
+          if (!isWordPress) {
+            logger.debug(`${result.url} is not WordPress, skipping`);
+            return null;
+          }
 
-      try {
-        // Check if it's a WordPress site
-        const isWordPress = await wordpressDetector.isWordPressSite(result.url);
-        
-        if (!isWordPress) {
-          logger.debug(`${result.url} is not WordPress, skipping`);
-          continue;
+          // Extract metadata
+          const metadata = await wordpressDetector.extractMetadata(result.url);
+          
+          // Get domain info
+          const domain = this.extractDomain(result.url);
+          
+          // Traffic estimation is fast, domain age is removed (unreliable/slow)
+          const traffic = await trafficEstimator.estimateTraffic(domain);
+
+          // Apply traffic filter only (domain age removed for speed/reliability)
+          if (minTraffic && (!traffic || traffic < minTraffic)) {
+            logger.debug(`${result.url} traffic too low (${traffic}), skipping`);
+            return null;
+          }
+
+          return {
+            url: result.url,
+            title: metadata.title || result.title || domain,
+            description: metadata.description || result.description,
+            domain,
+            isWordPress: true,
+            domainAge: undefined, // Removed - unreliable and slow
+            traffic: traffic || undefined,
+            email: metadata.email,
+          };
+        } catch (error) {
+          logger.warn(`Error processing ${result.url}:`, { error });
+          return null;
         }
+      });
 
-        // Extract metadata
-        const metadata = await wordpressDetector.extractMetadata(result.url);
-        
-        // Get domain info
-        const domain = this.extractDomain(result.url);
-        const domainAge = await domainAgeService.getDomainAgeInMonths(domain);
-        const traffic = await trafficEstimator.estimateTraffic(domain);
-
-        // Apply filters
-        if (minDomainAge && (!domainAge || domainAge < minDomainAge)) {
-          logger.debug(`${result.url} domain too young (${domainAge} months), skipping`);
-          continue;
+      const batchResults = await Promise.all(batchPromises);
+      for (const lead of batchResults) {
+        if (lead && candidateLeads.length < maxResults * 2) {
+          candidateLeads.push(lead);
+          logger.debug(`Found WordPress candidate: ${lead.url}`);
         }
-
-        if (minTraffic && (!traffic || traffic < minTraffic)) {
-          logger.debug(`${result.url} traffic too low (${traffic}), skipping`);
-          continue;
-        }
-
-        candidateLeads.push({
-          url: result.url,
-          title: metadata.title || result.title || domain,
-          description: metadata.description || result.description,
-          domain,
-          isWordPress: true,
-          domainAge: domainAge || undefined,
-          traffic: traffic || undefined,
-          email: metadata.email,
-        });
-
-        logger.debug(`Found WordPress candidate: ${result.url}`);
-      } catch (error) {
-        logger.warn(`Error processing ${result.url}:`, { error });
       }
     }
 
@@ -251,6 +271,27 @@ export class LeadService {
     // Sort by score descending
     discoveredLeads.sort((a, b) => b.score - a.score);
 
+    // Save discovery session to database if user is authenticated
+    if (options.userId) {
+      try {
+        await DiscoverySession.create({
+          clerkUserId: options.userId,
+          sessionId: discoverySessionId,
+          source: options.keywords.join(', '),
+          leads: discoveredLeads.map(lead => ({
+            ...lead,
+            isSaved: false,
+          })),
+          suggestedKeywords,
+          totalFound: discoveredLeads.length,
+          filteredOut: filteredOutCount,
+        });
+        logger.info('Discovery session saved to database', { discoverySessionId });
+      } catch (error) {
+        logger.error('Failed to save discovery session', { error, discoverySessionId });
+      }
+    }
+
     logger.info('Lead discovery completed', {
       found: discoveredLeads.length,
       filteredOut: filteredOutCount,
@@ -278,29 +319,26 @@ export class LeadService {
   }): number {
     let score = 0;
 
-    if (factors.isWordPress) score += 15;
-    if (factors.hasEmail) score += 15;
+    if (factors.isWordPress) score += 20;
+    if (factors.hasEmail) score += 20;
 
-    if (factors.domainAge) {
-      if (factors.domainAge >= 24) score += 20;
-      else if (factors.domainAge >= 12) score += 12;
-      else if (factors.domainAge >= 6) score += 8;
-    }
+    // Domain age is no longer used (removed for reliability)
 
     if (factors.traffic) {
       if (factors.traffic >= 10000) score += 25;
       else if (factors.traffic >= 5000) score += 18;
-      else if (factors.traffic >= 1000) score += 10;
-      else if (factors.traffic >= 500) score += 5;
+      else if (factors.traffic >= 1000) score += 12;
+      else if (factors.traffic >= 500) score += 8;
+      else score += 3; // Some traffic is better than none
     }
 
     // Bonus for personal/indie blogs (good collaboration targets)
-    if (factors.isPersonalBlog) score += 15;
-    if (factors.isGoodTarget) score += 10;
+    if (factors.isPersonalBlog) score += 20;
+    if (factors.isGoodTarget) score += 15;
 
-    // Confidence bonus
-    if (factors.confidence && factors.confidence > 70) {
-      score += Math.floor(factors.confidence / 20);
+    // Confidence bonus from AI classification
+    if (factors.confidence && factors.confidence > 50) {
+      score += Math.floor(factors.confidence / 10);
     }
 
     return Math.min(score, 100);
@@ -317,6 +355,7 @@ export class LeadService {
   ): Promise<ILead[]> {
     const savedLeads: ILead[] = [];
     const sessionId = discoverySessionId || uuidv4();
+    const savedUrls: string[] = [];
 
     for (const lead of leads) {
       try {
@@ -338,6 +377,7 @@ export class LeadService {
           existingLead.isActiveBlog = lead.isActiveBlog || existingLead.isActiveBlog;
           await existingLead.save();
           savedLeads.push(existingLead);
+          savedUrls.push(lead.url);
           logger.debug(`Updated existing lead: ${domain}`);
         } else {
           // Create new lead
@@ -366,14 +406,36 @@ export class LeadService {
 
           await newLead.save();
           savedLeads.push(newLead);
+          savedUrls.push(lead.url);
           logger.debug(`Saved new lead: ${domain}`);
         }
       } catch (error: any) {
         if (error.code === 11000) {
           logger.debug(`Lead already exists for domain: ${lead.url}`);
+          savedUrls.push(lead.url);
         } else {
           logger.error(`Error saving lead ${lead.url}:`, { error: error.message });
         }
+      }
+    }
+
+    // Mark leads as saved in the discovery session
+    if (sessionId && savedUrls.length > 0) {
+      try {
+        await DiscoverySession.updateOne(
+          { sessionId },
+          { 
+            $set: { 
+              'leads.$[elem].isSaved': true 
+            } 
+          },
+          { 
+            arrayFilters: [{ 'elem.url': { $in: savedUrls } }] 
+          }
+        );
+        logger.info('Marked leads as saved in discovery session', { sessionId, count: savedUrls.length });
+      } catch (error) {
+        logger.error('Failed to mark leads as saved in discovery session', { error, sessionId });
       }
     }
 
@@ -449,33 +511,73 @@ export class LeadService {
   }
 
   /**
-   * Get discovery sessions for a user
+   * Get discovery sessions for a user (from DiscoverySession collection)
+   * Shows sessions with remaining unsaved leads
    */
   async getDiscoverySessions(userId: string): Promise<Array<{
     sessionId: string;
     source: string;
     leadCount: number;
+    unsavedCount: number;
     createdAt: Date;
   }>> {
-    const sessions = await Lead.aggregate([
-      { $match: { clerkUserId: userId, discoverySessionId: { $exists: true, $ne: null } } },
-      {
-        $group: {
-          _id: '$discoverySessionId',
-          source: { $first: '$source' },
-          leadCount: { $sum: 1 },
-          createdAt: { $min: '$createdAt' },
-        },
-      },
-      { $sort: { createdAt: -1 } },
-    ]);
+    const sessions = await DiscoverySession.find({ clerkUserId: userId })
+      .sort({ createdAt: -1 })
+      .limit(20);
 
-    return sessions.map(s => ({
-      sessionId: s._id,
-      source: s.source,
-      leadCount: s.leadCount,
-      createdAt: s.createdAt,
-    }));
+    return sessions.map(session => {
+      const unsavedCount = session.leads.filter(lead => !lead.isSaved).length;
+      return {
+        sessionId: session.sessionId,
+        source: session.source,
+        leadCount: session.leads.length,
+        unsavedCount,
+        createdAt: session.createdAt,
+      };
+    }).filter(s => s.unsavedCount > 0); // Only show sessions with unsaved leads
+  }
+
+  /**
+   * Get unsaved leads from a discovery session
+   */
+  async getUnsavedLeadsFromSession(userId: string, sessionId: string): Promise<DiscoveredLead[]> {
+    const session = await DiscoverySession.findOne({ 
+      clerkUserId: userId, 
+      sessionId 
+    });
+
+    if (!session) {
+      logger.warn('Discovery session not found', { userId, sessionId });
+      return [];
+    }
+
+    // Return only unsaved leads
+    return session.leads
+      .filter(lead => !lead.isSaved)
+      .map(lead => ({
+        url: lead.url,
+        title: lead.title,
+        description: lead.description,
+        email: lead.email,
+        isWordPress: lead.isWordPress,
+        domainAge: lead.domainAge,
+        traffic: lead.traffic,
+        score: lead.score,
+        blogType: lead.blogType,
+        blogClassification: lead.blogClassification ? {
+          isPersonalBlog: lead.blogClassification.isPersonalBlog,
+          isCorporateSite: lead.blogClassification.isCorporateSite,
+          blogType: lead.blogType || 'unknown',
+          confidence: lead.blogClassification.confidence,
+          reasoning: lead.blogClassification.reasoning,
+          isGoodCollaborationTarget: lead.blogClassification.isGoodCollaborationTarget || false,
+          collaborationPotentialReason: lead.blogClassification.collaborationPotentialReason || '',
+          niche: lead.blogClassification.niche,
+          estimatedAudience: lead.blogClassification.estimatedAudience,
+        } : undefined,
+        isActiveBlog: lead.isActiveBlog,
+        isGoodTarget: lead.isGoodTarget,
+      }));
   }
 
   /**
@@ -538,32 +640,6 @@ export class LeadService {
     };
   }
 
-  private oldCalculateDiscoveryScore(factors: {
-    isWordPress: boolean;
-    hasEmail: boolean;
-    domainAge?: number | null;
-    traffic?: number | null;
-  }): number {
-    let score = 0;
-
-    if (factors.isWordPress) score += 20;
-    if (factors.hasEmail) score += 15;
-
-    if (factors.domainAge) {
-      if (factors.domainAge >= 24) score += 25;
-      else if (factors.domainAge >= 12) score += 15;
-      else if (factors.domainAge >= 6) score += 10;
-    }
-
-    if (factors.traffic) {
-      if (factors.traffic >= 10000) score += 30;
-      else if (factors.traffic >= 5000) score += 20;
-      else if (factors.traffic >= 1000) score += 10;
-    }
-
-    return Math.min(score, 100);
-  }
-
   async discoverAndQualifyLead(url: string, criteria: QualificationCriteria): Promise<LeadType> {
     logger.info(`Discovering lead: ${url}`);
 
@@ -598,8 +674,8 @@ export class LeadService {
     lead.description = metadata.description;
     lead.email = metadata.email;
 
-    // Get domain age
-    lead.domainAge = (await domainAgeService.getDomainAgeInMonths(domain)) || undefined;
+    // Domain age removed - was unreliable and slow
+    lead.domainAge = undefined;
 
     // Estimate traffic
     lead.traffic = (await trafficEstimator.estimateTraffic(domain)) || undefined;

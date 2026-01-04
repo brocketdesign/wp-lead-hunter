@@ -1,33 +1,82 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { useApi, type Lead } from '../lib/api';
+import { useApi } from '../lib/api';
 import {
   Users,
   Search,
   Filter,
-  MoreVertical,
   ExternalLink,
   Mail,
   Trash2,
   Loader2,
   ChevronLeft,
   ChevronRight,
+  User,
+  Building2,
+  Target,
+  Clock,
+  TrendingUp,
+  Calendar,
 } from 'lucide-react';
 import { cn } from '../lib/utils';
 
-const statusOptions = ['all', 'new', 'contacted', 'qualified', 'converted', 'rejected'] as const;
+interface Lead {
+  id: string;
+  _id?: string;
+  url: string;
+  domain: string;
+  title?: string;
+  description?: string;
+  email?: string;
+  domainAge?: number;
+  traffic?: number;
+  qualificationScore?: number;
+  score?: number;
+  status: string;
+  blogType?: 'personal' | 'indie' | 'corporate' | 'unknown';
+  blogClassification?: {
+    niche?: string;
+    reasoning?: string;
+    confidence?: number;
+    isGoodCollaborationTarget?: boolean;
+  };
+  isActiveBlog?: boolean;
+  lastPostDate?: string;
+  postFrequency?: string;
+  source?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+const statusOptions = ['all', 'DISCOVERED', 'QUALIFIED', 'CONTACTED', 'RESPONDED', 'CONVERTED', 'REJECTED'] as const;
+const blogTypeOptions = ['all', 'personal', 'indie', 'corporate', 'unknown'] as const;
 
 export default function Leads() {
   const api = useApi();
   const queryClient = useQueryClient();
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('all');
+  const [blogTypeFilter, setBlogTypeFilter] = useState<string>('all');
   const [currentPage, setCurrentPage] = useState(1);
   const itemsPerPage = 10;
 
+  // Fetch user's saved leads
   const { data: leadsData, isLoading } = useQuery({
-    queryKey: ['leads'],
-    queryFn: () => api.get<Lead[]>('/leads'),
+    queryKey: ['leads', 'my'],
+    queryFn: () => api.get<Lead[]>('/leads/my'),
+  });
+
+  // Fetch lead stats
+  const { data: statsData } = useQuery({
+    queryKey: ['leads', 'stats'],
+    queryFn: () => api.get<{
+      total: number;
+      qualified: number;
+      contacted: number;
+      converted: number;
+      byBlogType: Record<string, number>;
+      avgScore: number;
+    }>('/leads/my/stats'),
   });
 
   const deleteMutation = useMutation({
@@ -46,15 +95,18 @@ export default function Leads() {
   });
 
   const leads = leadsData?.data || [];
+  const stats = statsData?.data;
   
   // Filter leads
   const filteredLeads = leads.filter((lead) => {
     const matchesSearch =
       lead.title?.toLowerCase().includes(searchTerm.toLowerCase()) ||
       lead.url.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      lead.domain?.toLowerCase().includes(searchTerm.toLowerCase()) ||
       lead.email?.toLowerCase().includes(searchTerm.toLowerCase());
     const matchesStatus = statusFilter === 'all' || lead.status === statusFilter;
-    return matchesSearch && matchesStatus;
+    const matchesBlogType = blogTypeFilter === 'all' || lead.blogType === blogTypeFilter;
+    return matchesSearch && matchesStatus && matchesBlogType;
   });
 
   // Pagination
@@ -66,29 +118,59 @@ export default function Leads() {
 
   const getStatusBadgeClass = (status: string) => {
     switch (status) {
-      case 'new':
-        return 'badge-info';
-      case 'contacted':
-        return 'badge-warning';
-      case 'qualified':
+      case 'DISCOVERED':
+        return 'bg-gray-100 text-gray-800';
+      case 'QUALIFIED':
         return 'bg-purple-100 text-purple-800';
-      case 'converted':
-        return 'badge-success';
-      case 'rejected':
-        return 'badge-error';
+      case 'CONTACTED':
+        return 'bg-blue-100 text-blue-800';
+      case 'RESPONDED':
+        return 'bg-yellow-100 text-yellow-800';
+      case 'CONVERTED':
+        return 'bg-green-100 text-green-800';
+      case 'REJECTED':
+        return 'bg-red-100 text-red-800';
       default:
         return 'bg-gray-100 text-gray-800';
     }
   };
+
+  const getBlogTypeIcon = (blogType?: string) => {
+    switch (blogType) {
+      case 'personal':
+        return <User className="w-4 h-4 text-blue-500" />;
+      case 'indie':
+        return <Users className="w-4 h-4 text-purple-500" />;
+      case 'corporate':
+        return <Building2 className="w-4 h-4 text-gray-500" />;
+      default:
+        return null;
+    }
+  };
+
+  const getBlogTypeBadge = (blogType?: string) => {
+    switch (blogType) {
+      case 'personal':
+        return <span className="badge bg-blue-100 text-blue-800 text-xs">Personal</span>;
+      case 'indie':
+        return <span className="badge bg-purple-100 text-purple-800 text-xs">Indie</span>;
+      case 'corporate':
+        return <span className="badge bg-gray-100 text-gray-800 text-xs">Corporate</span>;
+      default:
+        return null;
+    }
+  };
+
+  const score = (lead: Lead) => lead.qualificationScore || lead.score || 0;
 
   return (
     <div className="space-y-6">
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900">Leads</h1>
+          <h1 className="text-2xl font-bold text-gray-900">My Leads</h1>
           <p className="text-gray-600 mt-1">
-            Manage and track your WordPress blog leads.
+            Manage and track your saved WordPress blogger leads.
           </p>
         </div>
         <a
@@ -99,6 +181,32 @@ export default function Leads() {
           Discover New
         </a>
       </div>
+
+      {/* Stats Cards */}
+      {stats && (
+        <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
+          <div className="card p-4">
+            <p className="text-sm text-gray-500">Total Leads</p>
+            <p className="text-2xl font-bold text-gray-900">{stats.total}</p>
+          </div>
+          <div className="card p-4">
+            <p className="text-sm text-gray-500">Qualified</p>
+            <p className="text-2xl font-bold text-purple-600">{stats.qualified}</p>
+          </div>
+          <div className="card p-4">
+            <p className="text-sm text-gray-500">Contacted</p>
+            <p className="text-2xl font-bold text-blue-600">{stats.contacted}</p>
+          </div>
+          <div className="card p-4">
+            <p className="text-sm text-gray-500">Converted</p>
+            <p className="text-2xl font-bold text-green-600">{stats.converted}</p>
+          </div>
+          <div className="card p-4">
+            <p className="text-sm text-gray-500">Avg Score</p>
+            <p className="text-2xl font-bold text-gray-900">{stats.avgScore}</p>
+          </div>
+        </div>
+      )}
 
       {/* Filters */}
       <div className="card">
@@ -128,7 +236,21 @@ export default function Leads() {
             >
               {statusOptions.map((status) => (
                 <option key={status} value={status}>
-                  {status.charAt(0).toUpperCase() + status.slice(1)}
+                  {status === 'all' ? 'All Statuses' : status}
+                </option>
+              ))}
+            </select>
+            <select
+              value={blogTypeFilter}
+              onChange={(e) => {
+                setBlogTypeFilter(e.target.value);
+                setCurrentPage(1);
+              }}
+              className="input w-auto"
+            >
+              {blogTypeOptions.map((type) => (
+                <option key={type} value={type}>
+                  {type === 'all' ? 'All Types' : type.charAt(0).toUpperCase() + type.slice(1)}
                 </option>
               ))}
             </select>
@@ -136,7 +258,7 @@ export default function Leads() {
         </div>
       </div>
 
-      {/* Leads Table */}
+      {/* Leads List */}
       <div className="card overflow-hidden p-0">
         {isLoading ? (
           <div className="flex items-center justify-center h-64">
@@ -147,138 +269,150 @@ export default function Leads() {
             <Users className="w-12 h-12 mb-4 text-gray-300" />
             <p className="text-lg font-medium">No leads found</p>
             <p className="text-sm">
-              {searchTerm || statusFilter !== 'all'
+              {searchTerm || statusFilter !== 'all' || blogTypeFilter !== 'all'
                 ? 'Try adjusting your filters'
-                : 'Start by discovering new WordPress blogs'}
+                : 'Start by discovering new WordPress bloggers'}
             </p>
           </div>
         ) : (
           <>
-            <div className="overflow-x-auto">
-              <table className="w-full">
-                <thead className="bg-gray-50 border-b border-gray-200">
-                  <tr>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Website
-                    </th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Contact
-                    </th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Score
-                    </th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Status
-                    </th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Added
-                    </th>
-                    <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Actions
-                    </th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-gray-200">
-                  {paginatedLeads.map((lead) => (
-                    <tr key={lead.id} className="hover:bg-gray-50">
-                      <td className="px-6 py-4">
-                        <div className="min-w-0">
-                          <p className="font-medium text-gray-900 truncate max-w-xs">
-                            {lead.title || 'Untitled'}
-                          </p>
-                          <a
-                            href={lead.url}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="text-sm text-gray-500 hover:text-primary-600 flex items-center gap-1 truncate max-w-xs"
-                          >
-                            {lead.url}
-                            <ExternalLink className="w-3 h-3 flex-shrink-0" />
-                          </a>
-                        </div>
-                      </td>
-                      <td className="px-6 py-4">
-                        {lead.email ? (
-                          <a
-                            href={`mailto:${lead.email}`}
-                            className="text-sm text-gray-600 hover:text-primary-600"
-                          >
-                            {lead.email}
-                          </a>
-                        ) : (
-                          <span className="text-sm text-gray-400">No email</span>
+            <div className="divide-y divide-gray-200">
+              {paginatedLeads.map((lead) => (
+                <div key={lead.id || lead._id} className="p-4 hover:bg-gray-50">
+                  <div className="flex items-start gap-4">
+                    {/* Lead Info */}
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 mb-1 flex-wrap">
+                        {getBlogTypeIcon(lead.blogType)}
+                        <a
+                          href={lead.url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="font-medium text-gray-900 hover:text-primary-600 truncate flex items-center gap-1"
+                        >
+                          {lead.title || lead.domain || 'Untitled'}
+                          <ExternalLink className="w-3 h-3 flex-shrink-0" />
+                        </a>
+                        {getBlogTypeBadge(lead.blogType)}
+                        {lead.blogClassification?.isGoodCollaborationTarget && (
+                          <span className="badge bg-green-100 text-green-800 text-xs flex items-center gap-1">
+                            <Target className="w-3 h-3" />
+                            Good Target
+                          </span>
                         )}
-                      </td>
-                      <td className="px-6 py-4">
+                      </div>
+                      
+                      <p className="text-sm text-gray-500 truncate">{lead.url}</p>
+                      
+                      {lead.description && (
+                        <p className="text-sm text-gray-600 mt-1 line-clamp-1">
+                          {lead.description}
+                        </p>
+                      )}
+                      
+                      {/* Meta info row */}
+                      <div className="flex items-center gap-4 mt-2 text-xs text-gray-500">
+                        {lead.blogClassification?.niche && (
+                          <span className="text-purple-600">
+                            Niche: {lead.blogClassification.niche}
+                          </span>
+                        )}
+                        {lead.domainAge && (
+                          <span className="flex items-center gap-1">
+                            <Clock className="w-3 h-3" />
+                            {lead.domainAge}mo old
+                          </span>
+                        )}
+                        {lead.traffic && (
+                          <span className="flex items-center gap-1">
+                            <TrendingUp className="w-3 h-3" />
+                            {lead.traffic.toLocaleString()} visits
+                          </span>
+                        )}
+                        {lead.postFrequency && (
+                          <span className="flex items-center gap-1">
+                            <Calendar className="w-3 h-3" />
+                            Posts: {lead.postFrequency}
+                          </span>
+                        )}
+                        {lead.source && (
+                          <span className="text-gray-400">
+                            via: {lead.source}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Right side: Score, Status, Actions */}
+                    <div className="flex items-center gap-4">
+                      {/* Score */}
+                      <div className="text-center">
                         <div className="flex items-center gap-2">
-                          <div className="w-16 h-2 bg-gray-200 rounded-full overflow-hidden">
+                          <div className="w-12 h-2 bg-gray-200 rounded-full overflow-hidden">
                             <div
                               className={cn(
                                 'h-full rounded-full',
-                                lead.score >= 70
+                                score(lead) >= 70
                                   ? 'bg-green-500'
-                                  : lead.score >= 40
+                                  : score(lead) >= 40
                                   ? 'bg-yellow-500'
                                   : 'bg-red-500'
                               )}
-                              style={{ width: `${lead.score}%` }}
+                              style={{ width: `${score(lead)}%` }}
                             />
                           </div>
-                          <span className="text-sm text-gray-600">{lead.score}</span>
+                          <span className="text-sm font-medium text-gray-700">{score(lead)}</span>
                         </div>
-                      </td>
-                      <td className="px-6 py-4">
-                        <select
-                          value={lead.status}
-                          onChange={(e) =>
-                            updateStatusMutation.mutate({
-                              id: lead.id,
-                              status: e.target.value,
-                            })
-                          }
-                          className={cn(
-                            'badge cursor-pointer border-0 pr-6',
-                            getStatusBadgeClass(lead.status)
-                          )}
-                        >
-                          {statusOptions.slice(1).map((status) => (
-                            <option key={status} value={status}>
-                              {status.charAt(0).toUpperCase() + status.slice(1)}
-                            </option>
-                          ))}
-                        </select>
-                      </td>
-                      <td className="px-6 py-4 text-sm text-gray-500">
-                        {new Date(lead.createdAt).toLocaleDateString()}
-                      </td>
-                      <td className="px-6 py-4">
-                        <div className="flex items-center justify-end gap-2">
-                          {lead.email && (
-                            <a
-                              href={`/dashboard/emails?leadId=${lead.id}`}
-                              className="p-2 text-gray-400 hover:text-primary-600 rounded-lg hover:bg-gray-100"
-                              title="Send email"
-                            >
-                              <Mail className="w-4 h-4" />
-                            </a>
-                          )}
-                          <button
-                            onClick={() => {
-                              if (confirm('Are you sure you want to delete this lead?')) {
-                                deleteMutation.mutate(lead.id);
-                              }
-                            }}
-                            className="p-2 text-gray-400 hover:text-red-600 rounded-lg hover:bg-gray-100"
-                            title="Delete lead"
+                      </div>
+
+                      {/* Status */}
+                      <select
+                        value={lead.status}
+                        onChange={(e) =>
+                          updateStatusMutation.mutate({
+                            id: lead.id || lead._id || '',
+                            status: e.target.value,
+                          })
+                        }
+                        className={cn(
+                          'badge cursor-pointer border-0 text-xs',
+                          getStatusBadgeClass(lead.status)
+                        )}
+                      >
+                        {statusOptions.slice(1).map((status) => (
+                          <option key={status} value={status}>
+                            {status}
+                          </option>
+                        ))}
+                      </select>
+
+                      {/* Actions */}
+                      <div className="flex items-center gap-1">
+                        {lead.email && (
+                          <a
+                            href={`/dashboard/emails?leadId=${lead.id || lead._id}`}
+                            className="p-2 text-gray-400 hover:text-primary-600 rounded-lg hover:bg-gray-100"
+                            title="Send email"
                           >
-                            <Trash2 className="w-4 h-4" />
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+                            <Mail className="w-4 h-4" />
+                          </a>
+                        )}
+                        <button
+                          onClick={() => {
+                            if (confirm('Are you sure you want to delete this lead?')) {
+                              deleteMutation.mutate(lead.id || lead._id || '');
+                            }
+                          }}
+                          className="p-2 text-gray-400 hover:text-red-600 rounded-lg hover:bg-gray-100"
+                          title="Delete lead"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              ))}
             </div>
 
             {/* Pagination */}

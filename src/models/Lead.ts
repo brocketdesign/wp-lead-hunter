@@ -21,6 +21,20 @@ export interface ILead extends Document {
     reasoning: string;
     niche?: string;
     estimatedAudience?: string;
+    isGoodCollaborationTarget?: boolean;
+    collaborationPotentialReason?: string;
+  };
+  
+  // Full analysis data (cached to avoid re-analysis)
+  analysisData?: {
+    analyzedAt: Date;
+    topics?: string[];
+    tone?: string;
+    targetAudience?: string;
+    contentSummary?: string;
+    estimatedMonthlyPosts?: number;
+    socialPresence?: string[];
+    contactMethods?: string[];
   };
 
   // Activity metrics
@@ -94,6 +108,20 @@ const leadSchema = new Schema<ILead>(
       reasoning: String,
       niche: String,
       estimatedAudience: String,
+      isGoodCollaborationTarget: Boolean,
+      collaborationPotentialReason: String,
+    },
+    
+    // Full analysis data (cached)
+    analysisData: {
+      analyzedAt: Date,
+      topics: [String],
+      tone: String,
+      targetAudience: String,
+      contentSummary: String,
+      estimatedMonthlyPosts: Number,
+      socialPresence: [String],
+      contactMethods: [String],
     },
 
     // Activity metrics
