@@ -10,16 +10,11 @@ export interface IDiscoveredLead {
   traffic?: number;
   score: number;
   blogType?: 'personal' | 'indie' | 'corporate' | 'unknown';
-  blogClassification?: {
-    isPersonalBlog: boolean;
-    isCorporateSite: boolean;
-    confidence: number;
-    reasoning: string;
-    niche?: string;
-    estimatedAudience?: string;
-    isGoodCollaborationTarget?: boolean;
-    collaborationPotentialReason?: string;
-  };
+  niche?: string;
+  wpConfidenceScore?: number;
+  isGoodCollaborationTarget?: boolean;
+  collaborationReason?: string;
+  estimatedAudience?: string;
   isActiveBlog?: boolean;
   isGoodTarget?: boolean;
   isSaved?: boolean; // Track if this lead has been saved to the Leads collection
@@ -52,16 +47,11 @@ const discoveredLeadSchema = new Schema<IDiscoveredLead>(
       enum: ['personal', 'indie', 'corporate', 'unknown'],
       default: 'unknown',
     },
-    blogClassification: {
-      isPersonalBlog: Boolean,
-      isCorporateSite: Boolean,
-      confidence: Number,
-      reasoning: String,
-      niche: String,
-      estimatedAudience: String,
-      isGoodCollaborationTarget: Boolean,
-      collaborationPotentialReason: String,
-    },
+    niche: String,
+    wpConfidenceScore: Number,
+    isGoodCollaborationTarget: Boolean,
+    collaborationReason: String,
+    estimatedAudience: String,
     isActiveBlog: Boolean,
     isGoodTarget: Boolean,
     isSaved: { type: Boolean, default: false },

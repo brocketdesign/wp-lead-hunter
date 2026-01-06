@@ -90,12 +90,31 @@ export interface QualificationRule {
   weight: number;
 }
 
+export type EmailTemplateCategory = 
+  | 'introduction'
+  | 'follow_up'
+  | 'collaboration'
+  | 'guest_post'
+  | 'link_building'
+  | 'partnership'
+  | 'feedback_request'
+  | 'thank_you'
+  | 'reengagement'
+  | 'custom';
+
 export interface EmailTemplate {
   id: string;
   name: string;
+  category: EmailTemplateCategory;
   subject: string;
   bodyTemplate: string;
   variables: string[];
+  isDefault?: boolean;
+  isActive?: boolean;
+  usageCount?: number;
+  lastUsedAt?: Date;
+  tags?: string[];
+  description?: string;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -121,3 +140,6 @@ export enum CampaignStatus {
   PAUSED = 'PAUSED',
   COMPLETED = 'COMPLETED',
 }
+
+// Re-export discovery types
+export * from './discovery';

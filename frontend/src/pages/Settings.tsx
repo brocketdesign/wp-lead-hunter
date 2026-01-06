@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { useApi, type UserSettings } from '../lib/api';
-import { Key, Database, Eye, EyeOff, Save, Check, AlertCircle, Loader2 } from 'lucide-react';
+import { useApi, type UserSettings, type EmailTemplateInitResult } from '../lib/api';
+import { Key, Database, Eye, EyeOff, Save, Check, AlertCircle, Loader2, Mail, RefreshCw } from 'lucide-react';
 
 export default function Settings() {
   const api = useApi();
@@ -40,6 +40,16 @@ export default function Settings() {
       // Clear the input fields after saving
       setOpenaiKey('');
       setNotionKey('');
+    },
+  });
+
+  // Initialize email templates mutation
+  const initTemplatesMutation = useMutation({
+    mutationFn: () => api.post<EmailTemplateInitResult>('/emails/templates/initialize', {}),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['user-settings'] });
+      setSaveSuccess(true);
+      setTimeout(() => setSaveSuccess(false), 3000);
     },
   });
 
@@ -285,6 +295,88 @@ export default function Settings() {
             Notion Integrations
           </a>
         </p>
+      </div>
+
+      {/* Email Templates Configuration */}
+      <div className="card">
+        <div className="flex items-center gap-3 mb-4">
+          <div className="w-10 h-10 bg-purple-100 rounded-lg flex items-center justify-center">
+            <Mail className="w-5 h-5 text-purple-600" />
+          </div>
+          <div>
+            <h2 className="text-lg font-semibold text-gray-900">Email Templates</h2>
+            <p className="text-sm text-gray-500">Pre-built templates for outreach campaigns</p>
+          </div>
+        </div>
+
+        {/* Current status */}
+        <div className="mb-4 p-3 bg-gray-50 rounded-lg">
+          <div className="flex items-center gap-2">
+            {settings?.emailTemplatesInitialized ? (
+              <>
+                <Check className="w-4 h-4 text-green-600" />
+                <span className="text-sm text-gray-700">
+                  Templates initialized
+                  {settings.emailTemplatesInitializedAt && (
+                    <span className="text-gray-500 ml-1">
+                      on {new Date(settings.emailTemplatesInitializedAt).toLocaleDateString()}
+                    </span>
+                  )}
+                </span>
+              </>
+            ) : (
+              <>
+                <AlertCircle className="w-4 h-4 text-yellow-600" />
+                <span className="text-sm text-gray-700">Email templates not initialized</span>
+              </>
+            )}
+          </div>
+        </div>
+
+        {/* Description */}
+        <p className="text-sm text-gray-600 mb-4">
+          Initialize 18 pre-built email templates organized by category: Introduction, Follow-up, 
+          Collaboration, Guest Post, Link Building, Partnership, Feedback Request, Thank You, and Re-engagement.
+        </p>
+
+        {/* Initialize button */}
+        <div className="flex gap-2">
+          <button
+            onClick={() => initTemplatesMutation.mutate()}
+            disabled={initTemplatesMutation.isPending}
+            className="btn btn-primary flex items-center gap-2"
+          >
+            {initTemplatesMutation.isPending ? (
+              <Loader2 className="w-4 h-4 animate-spin" />
+            ) : (
+              <RefreshCw className="w-4 h-4" />
+            )}
+            {settings?.emailTemplatesInitialized ? 'Re-initialize Templates' : 'Initialize Templates'}
+          </button>
+        </div>
+
+        {/* Result message */}
+        {initTemplatesMutation.isSuccess && initTemplatesMutation.data?.data && (
+          <div className="mt-4 p-3 bg-green-50 rounded-lg">
+            <div className="flex items-center gap-2">
+              <Check className="w-4 h-4 text-green-600" />
+              <span className="text-sm text-green-700">
+                {initTemplatesMutation.data.data.message} ({initTemplatesMutation.data.data.count} templates)
+              </span>
+            </div>
+          </div>
+        )}
+
+        {initTemplatesMutation.isError && (
+          <div className="mt-4 p-3 bg-red-50 rounded-lg">
+            <div className="flex items-center gap-2">
+              <AlertCircle className="w-4 h-4 text-red-600" />
+              <span className="text-sm text-red-700">
+                Failed to initialize templates. Please try again.
+              </span>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Info Card */}

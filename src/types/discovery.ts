@@ -45,7 +45,11 @@ export interface DiscoveredLead {
   traffic?: number;
   score: number;
   blogType?: 'personal' | 'indie' | 'corporate' | 'unknown';
-  blogClassification?: BlogClassification;
+  niche?: string;
+  wpConfidenceScore?: number;
+  isGoodCollaborationTarget?: boolean;
+  collaborationReason?: string;
+  estimatedAudience?: string;
   isActiveBlog?: boolean;
   lastPostDate?: Date;
   postFrequency?: string;
@@ -54,16 +58,14 @@ export interface DiscoveredLead {
   matchedKeyword?: string; // Which keyword found this lead
 }
 
+// Kept for backward compatibility - now simplified
 export interface BlogClassification {
-  isPersonalBlog: boolean;
-  isCorporateSite: boolean;
   blogType: 'personal' | 'indie' | 'corporate' | 'unknown';
-  confidence: number;
-  reasoning: string;
   niche?: string;
+  wpConfidenceScore?: number;
+  isGoodCollaborationTarget?: boolean;
+  collaborationReason?: string;
   estimatedAudience?: string;
-  isGoodCollaborationTarget: boolean;
-  collaborationPotentialReason: string;
 }
 
 export interface EnhancedDiscoveryOptions {

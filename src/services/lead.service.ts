@@ -1,12 +1,13 @@
 import { v4 as uuidv4 } from 'uuid';
 import { Lead as LeadType, LeadStatus, QualificationCriteria } from '../types';
 import { Lead, ILead, DiscoverySession } from '../models';
+import config from '../config';
 import logger from '../utils/logger';
 import wordpressDetector from './wordpressDetector.service';
 import trafficEstimator from './trafficEstimator.service';
 import notionService from './notion.service';
-import searchService from './search.service';
-import openaiService, { BlogClassification } from './openai.service';
+import searchService, { SearchResult } from './search.service';
+import openaiService from './openai.service';
 
 interface DiscoveryOptions {
   keywords: string[];
@@ -31,7 +32,11 @@ interface DiscoveredLead {
   traffic?: number;
   score: number;
   blogType?: 'personal' | 'indie' | 'corporate' | 'unknown';
-  blogClassification?: BlogClassification;
+  niche?: string;
+  wpConfidenceScore?: number;
+  isGoodCollaborationTarget?: boolean;
+  collaborationReason?: string;
+  estimatedAudience?: string;
   isActiveBlog?: boolean;
   lastPostDate?: Date;
   postFrequency?: string;
@@ -53,6 +58,8 @@ export class LeadService {
   /**
    * Discover leads by searching for WordPress blogs using keywords
    * Now with OpenAI-powered blog classification and filtering
+  /**
+   * Discover leads by searching for WordPress blogs
    */
   async discoverByKeywords(options: DiscoveryOptions): Promise<DiscoveryResult> {
     const {
@@ -70,6 +77,12 @@ export class LeadService {
     const discoverySessionId = uuidv4();
     let filteredOutCount = 0;
 
+    // Validate API key before starting
+    const effectiveApiKey = openaiApiKey || config.openai.apiKey;
+    if (!effectiveApiKey || effectiveApiKey.includes('your_') || effectiveApiKey.length < 20) {
+      throw new Error('OpenAI API key not configured. Please set your API key in Settings before running discovery.');
+    }
+
     logger.info('Starting keyword-based lead discovery', { 
       keywords, 
       maxResults, 
@@ -80,9 +93,12 @@ export class LeadService {
       excludeWordPressCom,
     });
 
-    // Update OpenAI service with user's API key if provided
+    // Update both OpenAI and Search services with user's API key if provided
     if (openaiApiKey) {
       openaiService.updateApiKey(openaiApiKey);
+      searchService.updateApiKey(openaiApiKey);
+    } else if (config.openai.apiKey) {
+      searchService.updateApiKey(config.openai.apiKey);
     }
 
     // Generate suggested keywords using OpenAI
@@ -109,6 +125,7 @@ export class LeadService {
     const processedUrls = new Set<string>();
 
     // First pass: collect basic info for all results
+    // Candidate leads include classification data from search results
     const candidateLeads: Array<{
       url: string;
       title: string;
@@ -118,6 +135,13 @@ export class LeadService {
       domainAge?: number;
       traffic?: number;
       email?: string;
+      // Classification from OpenAI web search
+      blogType?: 'personal' | 'indie' | 'corporate' | 'unknown';
+      niche?: string;
+      wpConfidenceScore?: number;
+      isGoodCollaborationTarget?: boolean;
+      collaborationReason?: string;
+      estimatedAudience?: string;
     }> = [];
 
     // Process search results in parallel batches for speed
@@ -133,11 +157,18 @@ export class LeadService {
       
       const batch = uniqueResults.slice(i, i + batchSize);
       
-      const batchPromises = batch.map(async (result) => {
+      const batchPromises = batch.map(async (result: SearchResult) => {
         try {
-          // Check if it's a WordPress site
-          const isWordPress = await wordpressDetector.isWordPressSite(result.url);
+          // Use classification from search results if available (from OpenAI web search)
+          const isWordPressFromSearch = result.isWordPress ?? false;
+          const wpConfidence = result.wpConfidenceScore ?? 0;
           
+          // Verify WordPress if not already confirmed by search with high confidence
+          let isWordPress = isWordPressFromSearch && wpConfidence >= 70;
+          if (!isWordPress) {
+            isWordPress = await wordpressDetector.isWordPressSite(result.url);
+          }
+
           if (!isWordPress) {
             logger.debug(`${result.url} is not WordPress, skipping`);
             return null;
@@ -147,7 +178,7 @@ export class LeadService {
           const metadata = await wordpressDetector.extractMetadata(result.url);
           
           // Get domain info
-          const domain = this.extractDomain(result.url);
+          const domain = result.domain || this.extractDomain(result.url);
           
           // Traffic estimation is fast, domain age is removed (unreliable/slow)
           const traffic = await trafficEstimator.estimateTraffic(domain);
@@ -167,6 +198,13 @@ export class LeadService {
             domainAge: undefined, // Removed - unreliable and slow
             traffic: traffic || undefined,
             email: metadata.email,
+            // Include classification from search results
+            blogType: result.blogType,
+            niche: result.niche,
+            wpConfidenceScore: wpConfidence,
+            isGoodCollaborationTarget: result.isGoodCollaborationTarget,
+            collaborationReason: result.collaborationReason,
+            estimatedAudience: result.estimatedAudience,
           };
         } catch (error) {
           logger.warn(`Error processing ${result.url}:`, { error });
@@ -185,84 +223,51 @@ export class LeadService {
 
     logger.info(`Found ${candidateLeads.length} WordPress candidates for classification`);
 
-    // Second pass: classify blogs using OpenAI to filter corporate sites
-    if (filterCorporate && candidateLeads.length > 0) {
-      const blogsToClassify = candidateLeads.map(lead => ({
+    // Second pass: use classification data from search results (already included in web search)
+    // Filter out corporate sites based on blogType from search results
+    for (const lead of candidateLeads) {
+      if (discoveredLeads.length >= maxResults) break;
+
+      // Filter out corporate sites if enabled
+      if (filterCorporate && lead.blogType === 'corporate') {
+        logger.debug(`${lead.url} classified as corporate site, filtering out`, {
+          blogType: lead.blogType,
+        });
+        filteredOutCount++;
+        continue;
+      }
+
+      // Check if it's a good collaboration target
+      const isGoodTarget = lead.isGoodCollaborationTarget ?? true;
+
+      // Calculate score with new factors
+      const score = this.calculateDiscoveryScore({
+        isWordPress: lead.isWordPress,
+        hasEmail: !!lead.email,
+        domainAge: lead.domainAge,
+        traffic: lead.traffic,
+        isPersonalBlog: lead.blogType === 'personal' || lead.blogType === 'indie',
+        confidence: lead.wpConfidenceScore,
+        isGoodTarget,
+      });
+
+      discoveredLeads.push({
         url: lead.url,
         title: lead.title,
         description: lead.description,
-        domain: lead.domain,
-      }));
-
-      const classifications = await openaiService.classifyBlogsParallel(blogsToClassify);
-
-      for (const lead of candidateLeads) {
-        if (discoveredLeads.length >= maxResults) break;
-
-        const classification = classifications.get(lead.url);
-        
-        // Filter out corporate sites if enabled
-        if (classification && classification.isCorporateSite) {
-          logger.debug(`${lead.url} classified as corporate site, filtering out`, {
-            blogType: classification.blogType,
-            reasoning: classification.reasoning,
-          });
-          filteredOutCount++;
-          continue;
-        }
-
-        // Check if it's a good collaboration target
-        const isGoodTarget = classification?.isGoodCollaborationTarget ?? true;
-
-        // Calculate score with new factors
-        const score = this.calculateDiscoveryScore({
-          isWordPress: lead.isWordPress,
-          hasEmail: !!lead.email,
-          domainAge: lead.domainAge,
-          traffic: lead.traffic,
-          isPersonalBlog: classification?.isPersonalBlog,
-          confidence: classification?.confidence,
-          isGoodTarget,
-        });
-
-        discoveredLeads.push({
-          url: lead.url,
-          title: lead.title,
-          description: lead.description,
-          email: lead.email,
-          isWordPress: lead.isWordPress,
-          domainAge: lead.domainAge,
-          traffic: lead.traffic,
-          score,
-          blogType: classification?.blogType || 'unknown',
-          blogClassification: classification,
-          isGoodTarget,
-        });
-      }
-    } else {
-      // No classification - just add candidates directly
-      for (const lead of candidateLeads) {
-        if (discoveredLeads.length >= maxResults) break;
-
-        const score = this.calculateDiscoveryScore({
-          isWordPress: lead.isWordPress,
-          hasEmail: !!lead.email,
-          domainAge: lead.domainAge,
-          traffic: lead.traffic,
-        });
-
-        discoveredLeads.push({
-          url: lead.url,
-          title: lead.title,
-          description: lead.description,
-          email: lead.email,
-          isWordPress: lead.isWordPress,
-          domainAge: lead.domainAge,
-          traffic: lead.traffic,
-          score,
-          blogType: 'unknown',
-        });
-      }
+        email: lead.email,
+        isWordPress: lead.isWordPress,
+        domainAge: lead.domainAge,
+        traffic: lead.traffic,
+        score,
+        blogType: lead.blogType || 'unknown',
+        niche: lead.niche,
+        wpConfidenceScore: lead.wpConfidenceScore,
+        isGoodCollaborationTarget: lead.isGoodCollaborationTarget,
+        collaborationReason: lead.collaborationReason,
+        estimatedAudience: lead.estimatedAudience,
+        isGoodTarget,
+      });
     }
 
     // Cache results for this session
@@ -373,7 +378,7 @@ export class LeadService {
           existingLead.domainAge = lead.domainAge || existingLead.domainAge;
           existingLead.qualificationScore = lead.score;
           existingLead.blogType = lead.blogType || existingLead.blogType;
-          existingLead.blogClassification = lead.blogClassification || existingLead.blogClassification;
+          existingLead.niche = lead.niche || existingLead.niche;
           existingLead.isActiveBlog = lead.isActiveBlog || existingLead.isActiveBlog;
           await existingLead.save();
           savedLeads.push(existingLead);
@@ -390,7 +395,7 @@ export class LeadService {
             email: lead.email,
             isWordPress: lead.isWordPress,
             blogType: lead.blogType || 'unknown',
-            blogClassification: lead.blogClassification,
+            niche: lead.niche,
             isActiveBlog: lead.isActiveBlog || false,
             lastPostDate: lead.lastPostDate,
             postFrequency: lead.postFrequency,
@@ -564,17 +569,11 @@ export class LeadService {
         traffic: lead.traffic,
         score: lead.score,
         blogType: lead.blogType,
-        blogClassification: lead.blogClassification ? {
-          isPersonalBlog: lead.blogClassification.isPersonalBlog,
-          isCorporateSite: lead.blogClassification.isCorporateSite,
-          blogType: lead.blogType || 'unknown',
-          confidence: lead.blogClassification.confidence,
-          reasoning: lead.blogClassification.reasoning,
-          isGoodCollaborationTarget: lead.blogClassification.isGoodCollaborationTarget || false,
-          collaborationPotentialReason: lead.blogClassification.collaborationPotentialReason || '',
-          niche: lead.blogClassification.niche,
-          estimatedAudience: lead.blogClassification.estimatedAudience,
-        } : undefined,
+        niche: lead.niche,
+        wpConfidenceScore: lead.wpConfidenceScore,
+        isGoodCollaborationTarget: lead.isGoodCollaborationTarget,
+        collaborationReason: lead.collaborationReason,
+        estimatedAudience: lead.estimatedAudience,
         isActiveBlog: lead.isActiveBlog,
         isGoodTarget: lead.isGoodTarget,
       }));

@@ -1,24 +1,11 @@
 import OpenAI from 'openai';
-import { z } from 'zod';
 import config from '../config';
 import logger from '../utils/logger';
 import { getErrorMessage } from '../utils/helpers';
 import { Lead, EmailTemplate } from '../types';
 
-// Zod schema for blog classification structured output
-const BlogClassificationSchema = z.object({
-  isPersonalBlog: z.boolean().describe('True if this appears to be a personal or indie blog run by an individual or small team'),
-  isCorporateSite: z.boolean().describe('True if this appears to be a corporate website, news outlet, or large business site'),
-  blogType: z.enum(['personal', 'indie', 'corporate', 'unknown']).describe('Classification: personal (individual blogger), indie (small team/independent), corporate (big company/news), unknown'),
-  confidence: z.number().min(0).max(100).describe('Confidence score 0-100 for this classification'),
-  reasoning: z.string().describe('Brief explanation of why this classification was made'),
-  niche: z.string().optional().describe('The blog niche/topic if identifiable (e.g., travel, food, tech, lifestyle)'),
-  estimatedAudience: z.string().optional().describe('Estimated target audience description'),
-  isGoodCollaborationTarget: z.boolean().describe('True if this blogger would be a good target for collaboration outreach'),
-  collaborationPotentialReason: z.string().describe('Why this is or is not a good collaboration target'),
-});
-
-export type BlogClassification = z.infer<typeof BlogClassificationSchema>;
+// Re-export BlogClassification from search service for backward compatibility
+export type { WordPressBlogResult as BlogClassification } from './search.service';
 
 export class OpenAIService {
   private client: OpenAI | null = null;
@@ -68,39 +55,89 @@ export class OpenAIService {
   }
 
   private buildPrompt(lead: Lead, template?: EmailTemplate): string {
+    // Build available data object for variable replacement
+    const availableData = {
+      name: lead.contactName || 'there',
+      contact_name: lead.contactName || 'there',
+      domain: lead.domain || new URL(lead.url).hostname.replace(/^www\./, ''),
+      url: lead.url,
+      title: lead.title || lead.domain || 'your blog',
+      blog_name: lead.title || lead.domain || 'your blog',
+      description: lead.description || '',
+      niche: lead.tags?.[0] || 'your niche',
+      email: lead.email || '',
+      // Placeholder for sender info - user should configure these in settings
+      sender_name: '[Your Name]',
+      sender_title: '[Your Title]',
+      company_name: '[Your Company]',
+      // Dynamic placeholders the AI should fill creatively
+      recent_topic: '[a recent topic from their blog]',
+      specific_compliment: '[something specific about their content]',
+      value_proposition: '[your unique value proposition]',
+      value_content: '[relevant content or resource]',
+      topic: lead.tags?.[0] || lead.title || 'your content',
+    };
+
     if (template) {
-      return `Generate a personalized outreach email based on this template:
-      
-Subject: ${template.subject}
-Body Template: ${template.bodyTemplate}
+      // Pre-replace known variables in the template
+      let processedSubject = template.subject;
+      let processedBody = template.bodyTemplate;
 
-Personalize it for:
-- Blog: ${lead.title || lead.domain}
-- URL: ${lead.url}
-- Description: ${lead.description || 'WordPress blog'}
-${lead.contactName ? `- Contact: ${lead.contactName}` : ''}
+      // Replace all known variables
+      for (const [key, value] of Object.entries(availableData)) {
+        const regex = new RegExp(`\\{\\{\\s*${key}\\s*\\}\\}`, 'gi');
+        processedSubject = processedSubject.replace(regex, value);
+        processedBody = processedBody.replace(regex, value);
+      }
 
-Make it engaging and professional. Return in format:
-SUBJECT: [subject line]
+      return `Generate a personalized outreach email by completing this template. 
+Replace any remaining {{placeholders}} with appropriate content based on the blog information.
+
+TEMPLATE SUBJECT: ${processedSubject}
+
+TEMPLATE BODY:
+${processedBody}
+
+BLOG INFORMATION:
+- Blog Name: ${availableData.title}
+- Domain: ${availableData.domain}
+- URL: ${availableData.url}
+- Description: ${availableData.description || 'A WordPress blog'}
+- Contact Name: ${availableData.name}
+- Niche/Topic: ${availableData.niche}
+
+INSTRUCTIONS:
+1. Replace any remaining {{variable}} placeholders with relevant, personalized content
+2. For {{recent_topic}}, invent a plausible recent blog topic based on their niche
+3. For {{specific_compliment}}, create a genuine compliment about their blog
+4. Keep the tone professional but friendly
+5. Make sure the email sounds natural and personalized, not templated
+6. Keep {{sender_name}}, {{sender_title}}, {{company_name}} as-is if they appear (user will fill these)
+
+Return in this exact format:
+SUBJECT: [the complete subject line]
 BODY:
-[email body]`;
+[the complete email body]`;
     }
 
     return `Generate a professional outreach email for a WordPress blog partnership opportunity.
 
 Target Blog Information:
-- Name: ${lead.title || lead.domain}
-- URL: ${lead.url}
-- Description: ${lead.description || 'WordPress blog'}
-${lead.contactName ? `- Contact Name: ${lead.contactName}` : ''}
+- Blog Name: ${availableData.title}
+- Domain: ${availableData.domain}
+- URL: ${availableData.url}
+- Description: ${availableData.description || 'A WordPress blog'}
+- Contact Name: ${availableData.name}
+- Niche/Topic: ${availableData.niche}
 
 Create a personalized email that:
-1. Introduces our service/partnership opportunity
+1. Addresses them by name if available
 2. Mentions something specific about their blog
-3. Proposes value for collaboration
-4. Has a clear call-to-action
+3. Explains the value of potential collaboration
+4. Has a clear, soft call-to-action
+5. Sounds genuine and not like a mass email
 
-Return in format:
+Return in this exact format:
 SUBJECT: [subject line]
 BODY:
 [email body]`;
@@ -122,14 +159,40 @@ BODY:
   ): { subject: string; body: string } {
     const blogName = lead.title || lead.domain;
     const contactName = lead.contactName || 'there';
+    const domain = lead.domain || new URL(lead.url).hostname.replace(/^www\./, '');
+    const niche = lead.tags?.[0] || 'your industry';
+
+    // Build replacement map
+    const replacements: Record<string, string> = {
+      name: contactName,
+      contact_name: contactName,
+      domain: domain,
+      url: lead.url,
+      title: blogName,
+      blog_name: blogName,
+      description: lead.description || '',
+      niche: niche,
+      email: lead.email || '',
+      sender_name: '[Your Name]',
+      sender_title: '[Your Title]',
+      company_name: '[Your Company]',
+      recent_topic: 'your recent content',
+      specific_compliment: 'the quality of your content',
+      value_proposition: 'potential collaboration opportunities',
+      value_content: 'some resources that might interest you',
+      topic: niche,
+    };
 
     if (template) {
-      // Simple variable replacement
-      let subject = template.subject.replace('{{blogName}}', blogName);
-      let body = template.bodyTemplate
-        .replace('{{contactName}}', contactName)
-        .replace('{{blogName}}', blogName)
-        .replace('{{url}}', lead.url);
+      let subject = template.subject;
+      let body = template.bodyTemplate;
+
+      // Replace all variables
+      for (const [key, value] of Object.entries(replacements)) {
+        const regex = new RegExp(`\\{\\{\\s*${key}\\s*\\}\\}`, 'gi');
+        subject = subject.replace(regex, value);
+        body = body.replace(regex, value);
+      }
 
       return { subject, body };
     }
@@ -288,127 +351,6 @@ Return ONLY a JSON array of strings like: ["keyword1", "keyword2", ...]`,
     ];
 
     return variations.slice(0, 10);
-  }
-
-  /**
-   * Classify a blog/website using structured JSON output to determine if it's a personal blog
-   * good for collaboration vs a corporate/news site that should be filtered out
-   */
-  async classifyBlog(data: {
-    url: string;
-    title: string;
-    description?: string;
-    domain: string;
-  }): Promise<BlogClassification> {
-    const defaultResult: BlogClassification = {
-      isPersonalBlog: false,
-      isCorporateSite: false,
-      blogType: 'unknown',
-      confidence: 0,
-      reasoning: 'Unable to classify - OpenAI not available',
-      isGoodCollaborationTarget: false,
-      collaborationPotentialReason: 'Could not analyze',
-    };
-
-    if (!this.client) {
-      return defaultResult;
-    }
-
-    try {
-      const response = await this.client.chat.completions.create({
-        model: 'gpt-4o-mini',
-        messages: [
-          {
-            role: 'system',
-            content: `You are an expert at analyzing websites and blogs to classify them. Your job is to determine if a website is:
-1. A personal blog run by an individual blogger who might be interested in collaborations
-2. An indie blog run by a small team that actively creates content
-3. A corporate website, news outlet, or large business that would NOT be appropriate for individual outreach
-
-We want to find bloggers who:
-- Maintain their blog regularly
-- Have a personal/authentic voice
-- Would be open to collaboration opportunities
-- Are NOT large corporations, news sites, or e-commerce platforms
-
-Look for clues in the domain name, title, and description to make your classification.
-Examples of GOOD targets: personal travel blogs, food bloggers, lifestyle bloggers, niche hobby blogs, individual tech reviewers
-Examples of BAD targets: CNN, Forbes, Amazon, large news outlets, corporate marketing sites, government sites, university sites
-
-IMPORTANT: Respond with a valid JSON object matching this schema:
-{
-  "isPersonalBlog": boolean,
-  "isCorporateSite": boolean,
-  "blogType": "personal" | "indie" | "corporate" | "unknown",
-  "confidence": number (0-100),
-  "reasoning": string,
-  "niche": string (optional),
-  "estimatedAudience": string (optional),
-  "isGoodCollaborationTarget": boolean,
-  "collaborationPotentialReason": string
-}`,
-          },
-          {
-            role: 'user',
-            content: `Classify this website:
-URL: ${data.url}
-Domain: ${data.domain}
-Title: ${data.title}
-Description: ${data.description || 'No description available'}
-
-Determine if this is a personal/indie blog good for collaboration or a corporate/large site to filter out.
-Respond with ONLY a valid JSON object.`,
-          },
-        ],
-        response_format: { type: 'json_object' },
-        temperature: 0.3,
-      });
-
-      const content = response.choices[0]?.message?.content;
-      const result = content ? BlogClassificationSchema.safeParse(JSON.parse(content)) : null;
-      
-      if (result?.success) {
-        logger.debug(`Blog classified: ${data.url}`, { 
-          blogType: result.data.blogType, 
-          confidence: result.data.confidence,
-          isGoodTarget: result.data.isGoodCollaborationTarget 
-        });
-        return result.data;
-      }
-
-      return defaultResult;
-    } catch (error) {
-      logger.error('Error classifying blog:', { error: getErrorMessage(error), url: data.url });
-      return defaultResult;
-    }
-  }
-
-  /**
-   * Batch classify multiple blogs for efficiency
-   */
-  async classifyBlogsParallel(blogs: Array<{
-    url: string;
-    title: string;
-    description?: string;
-    domain: string;
-  }>): Promise<Map<string, BlogClassification>> {
-    const results = new Map<string, BlogClassification>();
-    
-    // Process in batches of 5 to avoid rate limits
-    const batchSize = 5;
-    for (let i = 0; i < blogs.length; i += batchSize) {
-      const batch = blogs.slice(i, i + batchSize);
-      const promises = batch.map(blog => 
-        this.classifyBlog(blog).then(classification => ({ url: blog.url, classification }))
-      );
-      
-      const batchResults = await Promise.all(promises);
-      for (const { url, classification } of batchResults) {
-        results.set(url, classification);
-      }
-    }
-    
-    return results;
   }
 
   /**

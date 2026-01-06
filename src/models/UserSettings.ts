@@ -6,6 +6,9 @@ export interface IUserSettings extends Document {
   openaiApiKey?: string;
   notionApiKey?: string;
   notionDatabaseId?: string;
+  // Email template settings
+  emailTemplatesInitialized: boolean;
+  emailTemplatesInitializedAt?: Date;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -33,6 +36,14 @@ const userSettingsSchema = new Schema<IUserSettings>(
     notionDatabaseId: {
       type: String,
       default: '',
+    },
+    // Email template settings
+    emailTemplatesInitialized: {
+      type: Boolean,
+      default: false,
+    },
+    emailTemplatesInitializedAt: {
+      type: Date,
     },
   },
   {

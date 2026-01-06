@@ -59,6 +59,16 @@ export interface UserSettings {
   notionDatabaseId: string;
   openaiKeyPreview: string;
   notionKeyPreview: string;
+  // Email templates
+  emailTemplatesInitialized: boolean;
+  emailTemplatesInitializedAt?: string;
+}
+
+export interface EmailTemplateInitResult {
+  seeded: boolean;
+  count: number;
+  message: string;
+  alreadyInitialized: boolean;
 }
 
 export interface Lead {
@@ -80,7 +90,12 @@ export interface EmailTemplate {
   name: string;
   subject: string;
   body: string;
+  category?: string;
+  variables?: string[];
+  isDefault?: boolean;
+  description?: string;
   createdAt: string;
+  updatedAt?: string;
 }
 
 export interface DiscoverRequest {

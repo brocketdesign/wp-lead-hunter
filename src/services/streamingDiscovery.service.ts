@@ -1,17 +1,57 @@
 import { v4 as uuidv4 } from 'uuid';
 import { Response } from 'express';
-import { Lead, DiscoverySession } from '../models';
+import { DiscoverySession } from '../models';
 import logger from '../utils/logger';
 import wordpressDetector from './wordpressDetector.service';
 import trafficEstimator from './trafficEstimator.service';
-import searchService from './search.service';
-import openaiService, { BlogClassification } from './openai.service';
-import {
-  DiscoveryLogEntry,
-  DiscoveryChunk,
-  DiscoveredLead,
-  EnhancedDiscoveryOptions,
-} from '../types/discovery';
+import searchService, { SearchResult } from './search.service';
+import openaiService from './openai.service';
+import config from '../config';
+
+interface DiscoveryLogEntry {
+  timestamp: number;
+  type: 'info' | 'success' | 'warning' | 'error' | 'progress';
+  message: string;
+  details?: Record<string, unknown>;
+}
+
+interface DiscoveredLead {
+  url: string;
+  title?: string;
+  description?: string;
+  email?: string;
+  isWordPress: boolean;
+  domainAge?: number;
+  traffic?: number;
+  score: number;
+  blogType?: 'personal' | 'indie' | 'corporate' | 'unknown';
+  niche?: string;
+  wpConfidenceScore?: number;
+  collaborationReason?: string;
+  estimatedAudience?: string;
+  isActiveBlog?: boolean;
+  lastPostDate?: Date;
+  postFrequency?: string;
+  isGoodTarget?: boolean;
+  isSaved?: boolean;
+  matchedKeyword?: string;
+}
+
+interface EnhancedDiscoveryOptions {
+  keywords: string[];
+  minTraffic?: number;
+  maxResults?: number;
+  expandKeywords?: boolean;
+  autoSearchExpanded?: boolean;
+  maxPagesPerSearch?: number;
+  openaiApiKey?: string;
+  userId?: string;
+  filterCorporate?: boolean;
+  requireActiveBlog?: boolean;
+  language?: string;
+  excludeWordPressCom?: boolean;
+  chunkSize?: number;
+}
 
 type LogType = 'info' | 'success' | 'warning' | 'error' | 'progress';
 
@@ -36,7 +76,6 @@ export class StreamingDiscoveryService {
     };
     this.sendSSE(res, 'log', logEntry);
     
-    // Also log to server logger
     if (type === 'error') {
       logger.error(`[Discovery] ${message}`, details);
     } else if (type === 'warning') {
@@ -144,6 +183,19 @@ export class StreamingDiscoveryService {
     res.setHeader('X-Accel-Buffering', 'no');
 
     try {
+      // Validate API key before starting
+      const effectiveApiKey = openaiApiKey || config.openai.apiKey;
+      if (!effectiveApiKey || effectiveApiKey.includes('your_') || effectiveApiKey.length < 20) {
+        this.sendSSE(res, 'error', {
+          error: 'OpenAI API key not configured',
+          message: 'Please set your OpenAI API key in Settings before running discovery.',
+          code: 'MISSING_API_KEY',
+        });
+        this.sendLog(res, 'error', 'OpenAI API key not configured. Please set your API key in Settings.');
+        res.end();
+        return;
+      }
+
       this.sendLog(res, 'info', `Starting discovery session ${discoverySessionId}`, {
         keywords,
         maxResults,
@@ -151,10 +203,14 @@ export class StreamingDiscoveryService {
         language,
       });
 
-      // Update OpenAI service with user's API key if provided
+      // Update both OpenAI and Search services with user's API key if provided
       if (openaiApiKey) {
         openaiService.updateApiKey(openaiApiKey);
+        searchService.updateApiKey(openaiApiKey);
         this.sendLog(res, 'info', 'Using custom OpenAI API key');
+      } else if (config.openai.apiKey) {
+        // Ensure search service has the default API key
+        searchService.updateApiKey(config.openai.apiKey);
       }
 
       // Generate suggested keywords using OpenAI
@@ -203,15 +259,20 @@ export class StreamingDiscoveryService {
 
         try {
           // Search with pagination for more comprehensive results
+          // Pass progress callback to get real-time search updates
           const searchResults = await searchService.searchWordPressBlogs({
             keywords: [keyword],
             maxResults: maxPagesPerSearch * 10,
             language,
             excludeWordPressCom,
             maxPagesPerSearch,
+            onProgress: (message, details) => {
+              // Forward search progress to frontend
+              this.sendLog(res, 'progress', `[Search] ${message}`, details);
+            },
           });
 
-          this.sendLog(res, 'info', `Found ${searchResults.length} search results for "${keyword}"`);
+          this.sendLog(res, 'success', `Found ${searchResults.length} search results for "${keyword}"`);
 
           // Filter unique results
           const uniqueResults = searchResults.filter(r => {
@@ -232,23 +293,50 @@ export class StreamingDiscoveryService {
             const batch = uniqueResults.slice(i, i + batchSize);
             this.sendLog(res, 'progress', `Analyzing sites ${i + 1}-${Math.min(i + batchSize, uniqueResults.length)}...`);
 
-            const batchPromises = batch.map(async (result) => {
+            const batchPromises = batch.map(async (result: SearchResult) => {
               try {
-                // Check if it's a WordPress site
-                const isWordPress = await wordpressDetector.isWordPressSite(result.url);
+                // Use classification from search results if available (from OpenAI web search)
+                const isWordPressFromSearch = result.isWordPress ?? false;
+                const wpConfidence = result.wpConfidenceScore ?? 0;
                 
+                // Verify WordPress if not already confirmed by search
+                let isWordPress = isWordPressFromSearch && wpConfidence >= 70;
+                if (!isWordPress) {
+                  isWordPress = await wordpressDetector.isWordPressSite(result.url);
+                }
+
                 if (!isWordPress) {
                   return null;
                 }
 
-                // Extract metadata
+                // Filter corporate sites based on search classification
+                if (filterCorporate && result.blogType === 'corporate') {
+                  filteredOutCount++;
+                  this.sendLog(res, 'info', `Filtered corporate site: ${result.domain || this.extractDomain(result.url)}`);
+                  return null;
+                }
+
+                // Extract additional metadata
                 const metadata = await wordpressDetector.extractMetadata(result.url);
-                const domain = this.extractDomain(result.url);
+                const domain = result.domain || this.extractDomain(result.url);
                 const traffic = await trafficEstimator.estimateTraffic(domain);
 
                 if (minTraffic && (!traffic || traffic < minTraffic)) {
                   return null;
                 }
+
+                // Use classification from search results
+                const isPersonalBlog = result.blogType === 'personal' || result.blogType === 'indie';
+                const isGoodTarget = result.isGoodCollaborationTarget ?? true;
+
+                const score = this.calculateDiscoveryScore({
+                  isWordPress: true,
+                  hasEmail: !!(metadata.email || result.url),
+                  traffic: traffic || undefined,
+                  isPersonalBlog,
+                  confidence: wpConfidence,
+                  isGoodTarget,
+                });
 
                 return {
                   url: result.url,
@@ -259,102 +347,33 @@ export class StreamingDiscoveryService {
                   traffic: traffic || undefined,
                   email: metadata.email,
                   matchedKeyword: keyword,
-                };
+                  score,
+                  blogType: result.blogType || 'unknown',
+                  niche: result.niche,
+                  wpConfidenceScore: wpConfidence,
+                  isGoodTarget,
+                  collaborationReason: result.collaborationReason,
+                  estimatedAudience: result.estimatedAudience,
+                } as DiscoveredLead;
               } catch {
                 return null;
               }
             });
 
             const batchResults = await Promise.all(batchPromises);
-            const validResults = batchResults.filter(Boolean);
+            const validLeads = batchResults.filter((lead): lead is DiscoveredLead => lead !== null);
 
-            // Classify with OpenAI if filtering corporate
-            if (filterCorporate && validResults.length > 0) {
-              const blogsToClassify = validResults.map((lead: any) => ({
-                url: lead.url,
-                title: lead.title,
-                description: lead.description,
-                domain: lead.domain,
-              }));
+            for (const lead of validLeads) {
+              if (allDiscoveredLeads.length >= maxResults) continue;
 
-              const classifications = await openaiService.classifyBlogsParallel(blogsToClassify);
+              batchLeads.push(lead);
+              allDiscoveredLeads.push(lead);
 
-              for (const lead of validResults) {
-                if (!lead || allDiscoveredLeads.length >= maxResults) continue;
-
-                const classification = classifications.get(lead.url);
-                
-                if (classification?.isCorporateSite) {
-                  filteredOutCount++;
-                  this.sendLog(res, 'info', `Filtered corporate site: ${lead.domain}`);
-                  continue;
-                }
-
-                const isGoodTarget = classification?.isGoodCollaborationTarget ?? true;
-                const score = this.calculateDiscoveryScore({
-                  isWordPress: true,
-                  hasEmail: !!lead.email,
-                  traffic: lead.traffic,
-                  isPersonalBlog: classification?.isPersonalBlog,
-                  confidence: classification?.confidence,
-                  isGoodTarget,
-                });
-
-                const discoveredLead: DiscoveredLead = {
-                  url: lead.url,
-                  title: lead.title,
-                  description: lead.description,
-                  email: lead.email,
-                  isWordPress: true,
-                  traffic: lead.traffic,
-                  score,
-                  blogType: classification?.blogType || 'unknown',
-                  blogClassification: classification,
-                  isGoodTarget,
-                  matchedKeyword: keyword,
-                };
-
-                batchLeads.push(discoveredLead);
-                allDiscoveredLeads.push(discoveredLead);
-
-                // Send chunk when we have enough leads
-                if (batchLeads.length >= chunkSize) {
-                  this.sendLeadsChunk(res, batchLeads, allDiscoveredLeads.length, searchedKeywords);
-                  this.sendLog(res, 'success', `Found ${batchLeads.length} new leads (${allDiscoveredLeads.length} total)`);
-                  batchLeads = [];
-                }
-              }
-            } else {
-              // No classification - add directly
-              for (const lead of validResults) {
-                if (!lead || allDiscoveredLeads.length >= maxResults) continue;
-
-                const score = this.calculateDiscoveryScore({
-                  isWordPress: true,
-                  hasEmail: !!lead.email,
-                  traffic: lead.traffic,
-                });
-
-                const discoveredLead: DiscoveredLead = {
-                  url: lead.url,
-                  title: lead.title,
-                  description: lead.description,
-                  email: lead.email,
-                  isWordPress: true,
-                  traffic: lead.traffic,
-                  score,
-                  blogType: 'unknown',
-                  matchedKeyword: keyword,
-                };
-
-                batchLeads.push(discoveredLead);
-                allDiscoveredLeads.push(discoveredLead);
-
-                if (batchLeads.length >= chunkSize) {
-                  this.sendLeadsChunk(res, batchLeads, allDiscoveredLeads.length, searchedKeywords);
-                  this.sendLog(res, 'success', `Found ${batchLeads.length} new leads (${allDiscoveredLeads.length} total)`);
-                  batchLeads = [];
-                }
+              // Send chunk when we have enough leads
+              if (batchLeads.length >= chunkSize) {
+                this.sendLeadsChunk(res, batchLeads, allDiscoveredLeads.length, searchedKeywords);
+                this.sendLog(res, 'success', `Found ${batchLeads.length} new leads (${allDiscoveredLeads.length} total)`);
+                batchLeads = [];
               }
             }
           }

@@ -12,6 +12,7 @@ import {
   Sparkles,
   X,
   Check,
+  Download,
 } from 'lucide-react';
 import { cn } from '../lib/utils';
 
@@ -77,6 +78,15 @@ export default function Emails() {
       if (response.data) {
         setGeneratedEmail(response.data);
       }
+    },
+  });
+
+  // Seed default templates mutation
+  const seedTemplatesMutation = useMutation({
+    mutationFn: () =>
+      api.post<{ seeded: boolean; count: number; message: string }>('/emails/templates/initialize', {}),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['email-templates'] });
     },
   });
 
@@ -172,15 +182,29 @@ export default function Emails() {
             No templates yet
           </h3>
           <p className="text-gray-500 max-w-md mx-auto mb-6">
-            Create your first email template to start sending personalized outreach emails.
+            Create your first email template or load default templates to start sending personalized outreach emails.
           </p>
-          <button
-            onClick={() => openTemplateModal()}
-            className="btn btn-primary inline-flex items-center gap-2"
-          >
-            <Plus className="w-4 h-4" />
-            Create Template
-          </button>
+          <div className="flex items-center justify-center gap-3">
+            <button
+              onClick={() => seedTemplatesMutation.mutate()}
+              disabled={seedTemplatesMutation.isPending}
+              className="btn btn-secondary inline-flex items-center gap-2"
+            >
+              {seedTemplatesMutation.isPending ? (
+                <Loader2 className="w-4 h-4 animate-spin" />
+              ) : (
+                <Download className="w-4 h-4" />
+              )}
+              Load Default Templates
+            </button>
+            <button
+              onClick={() => openTemplateModal()}
+              className="btn btn-primary inline-flex items-center gap-2"
+            >
+              <Plus className="w-4 h-4" />
+              Create Template
+            </button>
+          </div>
         </div>
       ) : (
         <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-4">

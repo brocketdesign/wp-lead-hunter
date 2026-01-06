@@ -1,6 +1,7 @@
-import { useState } from 'react';
+import { useState, useRef, useEffect, useCallback } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useApi } from '../lib/api';
+import { useApi, UserSettings } from '../lib/api';
+import { useAuth } from '@clerk/clerk-react';
 import {
   Search,
   Globe,
@@ -20,6 +21,13 @@ import {
   Eye,
   X,
   ExternalLink,
+  Zap,
+  Activity,
+  Terminal,
+  ChevronDown,
+  ChevronUp,
+  Tag,
+  Settings,
 } from 'lucide-react';
 
 interface BlogClassification {
@@ -47,14 +55,7 @@ interface DiscoveredLead {
   blogClassification?: BlogClassification;
   isActiveBlog?: boolean;
   isGoodTarget?: boolean;
-}
-
-interface DiscoveryResult {
-  leads: DiscoveredLead[];
-  suggestedKeywords: string[];
-  totalFound: number;
-  filteredOut: number;
-  discoverySessionId: string;
+  matchedKeyword?: string;
 }
 
 interface DiscoverySession {
@@ -65,29 +66,81 @@ interface DiscoverySession {
   createdAt: string;
 }
 
+interface LogEntry {
+  timestamp: number;
+  type: 'info' | 'success' | 'warning' | 'error' | 'progress';
+  message: string;
+  details?: Record<string, unknown>;
+}
+
 export default function Discover() {
   const api = useApi();
+  const { getToken } = useAuth();
   const queryClient = useQueryClient();
   
   const [keywords, setKeywords] = useState('');
   const [minTraffic, setMinTraffic] = useState(500);
   const [filterCorporate, setFilterCorporate] = useState(true);
-  const [language, setLanguage] = useState(''); // Empty = all languages
-  const [excludeWordPressCom, setExcludeWordPressCom] = useState(true); // Exclude hosted wordpress.com blogs
+  const [language, setLanguage] = useState('');
+  const [excludeWordPressCom, setExcludeWordPressCom] = useState(true);
+  const [autoSearchExpanded, setAutoSearchExpanded] = useState(true);
+  const [maxResults, setMaxResults] = useState(50);
   const [discoveredLeads, setDiscoveredLeads] = useState<DiscoveredLead[]>([]);
   const [selectedLeads, setSelectedLeads] = useState<Set<string>>(new Set());
   const [discoverySessionId, setDiscoverySessionId] = useState<string | null>(null);
   const [suggestedKeywords, setSuggestedKeywords] = useState<string[]>([]);
+  const [expandedKeywords, setExpandedKeywords] = useState<string[]>([]);
+  const [searchedKeywords, setSearchedKeywords] = useState<string[]>([]);
   const [filteredOutCount, setFilteredOutCount] = useState(0);
   const [showHistory, setShowHistory] = useState(false);
   const [selectedAnalysis, setSelectedAnalysis] = useState<DiscoveredLead | null>(null);
   const [isViewingFromHistory, setIsViewingFromHistory] = useState(false);
+  
+  // Streaming state
+  const [isStreaming, setIsStreaming] = useState(false);
+  const [logs, setLogs] = useState<LogEntry[]>([]);
+  const [showLogs, setShowLogs] = useState(true);
+  const logsEndRef = useRef<HTMLDivElement>(null);
+  const abortControllerRef = useRef<AbortController | null>(null);
+
+  // Auto-scroll logs
+  useEffect(() => {
+    if (showLogs && logsEndRef.current) {
+      logsEndRef.current.scrollIntoView({ behavior: 'smooth' });
+    }
+  }, [logs, showLogs]);
+
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      if (abortControllerRef.current) {
+        abortControllerRef.current.abort();
+      }
+    };
+  }, []);
 
   // Fetch discovery history
   const { data: sessionsData } = useQuery({
     queryKey: ['discovery-sessions'],
     queryFn: () => api.get<DiscoverySession[]>('/leads/my/sessions'),
   });
+
+  // Fetch user settings to check for API key
+  const {
+    data: settingsData,
+    isLoading: isLoadingSettings,
+    isError: isSettingsError,
+    error: settingsError,
+    refetch: refetchSettings,
+  } = useQuery({
+    queryKey: ['user-settings'],
+    queryFn: () => api.get<UserSettings>('/user/settings'),
+    staleTime: 1000 * 60 * 5, // Cache for 5 minutes
+    retry: 1,
+  });
+
+  const hasOpenaiKey = settingsData?.data?.hasOpenaiKey ?? false;
+  const isSettingsReady = !isLoadingSettings && !isSettingsError && settingsData !== undefined;
 
   // Fetch unsaved leads from a session
   const loadSessionLeadsMutation = useMutation({
@@ -98,28 +151,11 @@ export default function Discover() {
         setDiscoveredLeads(response.data);
         setSelectedLeads(new Set());
         setSuggestedKeywords([]);
+        setExpandedKeywords([]);
+        setSearchedKeywords([]);
         setFilteredOutCount(0);
         setIsViewingFromHistory(true);
-      }
-    },
-  });
-
-  const discoverMutation = useMutation({
-    mutationFn: (data: { 
-      keywords: string[]; 
-      minTraffic?: number;
-      filterCorporate?: boolean;
-      language?: string;
-      excludeWordPressCom?: boolean;
-    }) => api.post<DiscoveryResult>('/leads/discover', data),
-    onSuccess: (response) => {
-      if (response.data) {
-        setDiscoveredLeads(response.data.leads || []);
-        setSelectedLeads(new Set());
-        setDiscoverySessionId(response.data.discoverySessionId);
-        setSuggestedKeywords(response.data.suggestedKeywords || []);
-        setFilteredOutCount(response.data.filteredOut || 0);
-        setIsViewingFromHistory(false);
+        setLogs([]);
       }
     },
   });
@@ -137,18 +173,210 @@ export default function Discover() {
     },
   });
 
-  const handleDiscover = (e: React.FormEvent) => {
-    e.preventDefault();
+  // Start streaming discovery
+  const startStreamingDiscovery = useCallback(async () => {
     if (!keywords.trim()) return;
     
+    // Wait for settings to load before checking API key
+    if (isLoadingSettings) {
+      setLogs([{
+        timestamp: Date.now(),
+        type: 'warning',
+        message: 'Loading settings, please wait...'
+      }]);
+      setShowLogs(true);
+      return;
+    }
+
+    // If settings failed to load, try to refetch once and report error if it still fails
+    if (isSettingsError) {
+      setLogs([{
+        timestamp: Date.now(),
+        type: 'warning',
+        message: 'Failed to load settings, retrying...'
+      }]);
+      setShowLogs(true);
+
+      try {
+        const refetchResult = await refetchSettings();
+        if (!refetchResult.data) {
+          setLogs(prev => [...prev, {
+            timestamp: Date.now(),
+            type: 'error',
+            message: 'Unable to load settings. Please refresh the page or check your network/authorization.'
+          }]);
+          setIsStreaming(false);
+          return;
+        }
+      } catch (refetchError) {
+        setLogs(prev => [...prev, {
+          timestamp: Date.now(),
+          type: 'error',
+          message: 'Failed to fetch settings. Please refresh the page or sign in again.'
+        }]);
+        setIsStreaming(false);
+        return;
+      }
+    }
+
+    // Check for API key before starting (only if settings are loaded)
+    if (!hasOpenaiKey) {
+      setLogs([{
+        timestamp: Date.now(),
+        type: 'error',
+        message: 'OpenAI API key not configured. Please go to Settings and add your API key before running discovery.',
+      }]);
+      setShowLogs(true);
+      return;
+    }
+    
     const keywordList = keywords.split(',').map((k) => k.trim()).filter(Boolean);
-    discoverMutation.mutate({
-      keywords: keywordList,
-      minTraffic,
-      filterCorporate,
-      language: language || undefined, // Only send if selected
-      excludeWordPressCom,
-    });
+    
+    // Reset state
+    setDiscoveredLeads([]);
+    setSelectedLeads(new Set());
+    setSuggestedKeywords([]);
+    setExpandedKeywords([]);
+    setSearchedKeywords([]);
+    setFilteredOutCount(0);
+    setIsViewingFromHistory(false);
+    setLogs([]);
+    setIsStreaming(true);
+    setShowLogs(true);
+
+    // Create abort controller
+    abortControllerRef.current = new AbortController();
+
+    try {
+      const token = await getToken();
+      
+      const response = await fetch('/api/leads/discover/stream', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': token ? `Bearer ${token}` : '',
+        },
+        body: JSON.stringify({
+          keywords: keywordList,
+          minTraffic,
+          maxResults,
+          expandKeywords: true,
+          autoSearchExpanded,
+          maxPagesPerSearch: 2,
+          filterCorporate,
+          language: language || undefined,
+          excludeWordPressCom,
+          chunkSize: 10,
+        }),
+        signal: abortControllerRef.current.signal,
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to start discovery');
+      }
+
+      const reader = response.body?.getReader();
+      const decoder = new TextDecoder();
+
+      if (!reader) {
+        throw new Error('No response body');
+      }
+
+      let buffer = '';
+
+      while (true) {
+        const { done, value } = await reader.read();
+        
+        if (done) break;
+        
+        buffer += decoder.decode(value, { stream: true });
+        
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+        
+        let currentEvent = '';
+        let currentData = '';
+        
+        for (const line of lines) {
+          if (line.startsWith('event: ')) {
+            currentEvent = line.slice(7).trim();
+          } else if (line.startsWith('data: ')) {
+            currentData = line.slice(6);
+            
+            try {
+              const data = JSON.parse(currentData);
+              
+              switch (currentEvent) {
+                case 'log':
+                  setLogs(prev => [...prev, data as LogEntry]);
+                  break;
+                  
+                case 'leads':
+                  setDiscoveredLeads(prev => [...prev, ...data.leads]);
+                  setSearchedKeywords(data.searchedKeywords || []);
+                  break;
+                  
+                case 'keywords':
+                  setSuggestedKeywords(data.suggestedKeywords || []);
+                  setExpandedKeywords(data.expandedKeywords || []);
+                  break;
+                  
+                case 'complete':
+                  setFilteredOutCount(data.filteredOut || 0);
+                  setDiscoverySessionId(data.discoverySessionId);
+                  setSearchedKeywords(data.searchedKeywords || []);
+                  setIsStreaming(false);
+                  break;
+                  
+                case 'error':
+                  const errorMessage = data.code === 'MISSING_API_KEY' 
+                    ? 'OpenAI API key not configured. Please go to Settings and add your API key.'
+                    : (data.error || data.message || 'Discovery failed');
+                  setLogs(prev => [...prev, {
+                    timestamp: Date.now(),
+                    type: 'error',
+                    message: errorMessage,
+                  }]);
+                  setIsStreaming(false);
+                  break;
+              }
+            } catch {
+              // Ignore parse errors
+            }
+            
+            currentEvent = '';
+            currentData = '';
+          }
+        }
+      }
+    } catch (error) {
+      if ((error as Error).name !== 'AbortError') {
+        setLogs(prev => [...prev, {
+          timestamp: Date.now(),
+          type: 'error',
+          message: error instanceof Error ? error.message : 'Discovery failed',
+        }]);
+      }
+      setIsStreaming(false);
+    }
+  }, [keywords, minTraffic, maxResults, autoSearchExpanded, filterCorporate, language, excludeWordPressCom, getToken, hasOpenaiKey, isSettingsReady]);
+
+  const handleDiscover = (e: React.FormEvent) => {
+    e.preventDefault();
+    startStreamingDiscovery();
+  };
+
+  const stopDiscovery = () => {
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+      abortControllerRef.current = null;
+    }
+    setIsStreaming(false);
+    setLogs(prev => [...prev, {
+      timestamp: Date.now(),
+      type: 'warning',
+      message: 'Discovery stopped by user',
+    }]);
   };
 
   const toggleSelectLead = (url: string) => {
@@ -221,8 +449,55 @@ export default function Discover() {
     }
   };
 
+  const getLogIcon = (type: LogEntry['type']) => {
+    switch (type) {
+      case 'success':
+        return <CheckCircle className="w-3 h-3 text-green-500" />;
+      case 'error':
+        return <AlertCircle className="w-3 h-3 text-red-500" />;
+      case 'warning':
+        return <AlertCircle className="w-3 h-3 text-yellow-500" />;
+      case 'progress':
+        return <Activity className="w-3 h-3 text-blue-500 animate-pulse" />;
+      default:
+        return <Terminal className="w-3 h-3 text-gray-400" />;
+    }
+  };
+
+  const highlightKeyword = (text: string | undefined, keyword: string | undefined) => {
+    if (!text || !keyword) return text;
+    const regex = new RegExp(`(${keyword.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'gi');
+    const parts = text.split(regex);
+    return parts.map((part, i) => 
+      regex.test(part) ? (
+        <mark key={i} className="bg-yellow-200 px-0.5 rounded">{part}</mark>
+      ) : part
+    );
+  };
+
   return (
     <div className="space-y-6">
+      {/* API Key Warning Banner - only show when settings are loaded and key is missing */}
+      {isSettingsReady && !hasOpenaiKey && (
+        <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4 flex items-start gap-3">
+          <AlertCircle className="w-5 h-5 text-yellow-600 flex-shrink-0 mt-0.5" />
+          <div className="flex-1">
+            <h3 className="font-medium text-yellow-800">OpenAI API Key Required</h3>
+            <p className="text-sm text-yellow-700 mt-1">
+              You need to configure your OpenAI API key before running lead discovery. 
+              The discovery feature uses OpenAI's web search to find WordPress blogs.
+            </p>
+            <a 
+              href="/settings" 
+              className="inline-flex items-center gap-1.5 mt-2 text-sm font-medium text-yellow-800 hover:text-yellow-900"
+            >
+              <Settings className="w-4 h-4" />
+              Go to Settings
+            </a>
+          </div>
+        </div>
+      )}
+
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
@@ -305,6 +580,7 @@ export default function Discover() {
                 onChange={(e) => setKeywords(e.target.value)}
                 placeholder="e.g., travel blog, food recipes, tech reviews"
                 className="input pl-10"
+                disabled={isStreaming}
               />
             </div>
             <p className="text-xs text-gray-500 mt-1">
@@ -312,28 +588,68 @@ export default function Discover() {
             </p>
           </div>
 
-          {/* Suggested Keywords */}
-          {suggestedKeywords.length > 0 && (
+          {/* Searched Keywords - Highlighted */}
+          {searchedKeywords.length > 0 && (
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                Suggested Keywords
+              <label className="block text-sm font-medium text-gray-700 mb-2 flex items-center gap-2">
+                <Tag className="w-4 h-4" />
+                Searched Keywords
               </label>
               <div className="flex flex-wrap gap-2">
-                {suggestedKeywords.map((kw) => (
-                  <button
-                    key={kw}
-                    type="button"
-                    onClick={() => addSuggestedKeyword(kw)}
-                    className="px-3 py-1 text-sm bg-gray-100 hover:bg-gray-200 rounded-full text-gray-700 transition-colors"
-                  >
-                    + {kw}
-                  </button>
-                ))}
+                {(expandedKeywords.length > 0 ? expandedKeywords : keywords.split(',').map(k => k.trim())).map((kw) => {
+                  const wasSearched = searchedKeywords.includes(kw);
+                  return (
+                    <span
+                      key={kw}
+                      className={`px-3 py-1 text-sm rounded-full transition-all ${
+                        wasSearched
+                          ? 'bg-green-100 text-green-800 border border-green-300'
+                          : 'bg-gray-100 text-gray-500 border border-gray-200'
+                      }`}
+                    >
+                      {wasSearched && <CheckCircle className="w-3 h-3 inline mr-1" />}
+                      {kw}
+                    </span>
+                  );
+                })}
               </div>
             </div>
           )}
 
-          <div className="grid sm:grid-cols-2 gap-4">
+          {/* Suggested Keywords */}
+          {suggestedKeywords.length > 0 && (
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                AI Suggested Keywords
+              </label>
+              <div className="flex flex-wrap gap-2">
+                {suggestedKeywords.map((kw) => {
+                  const isIncluded = expandedKeywords.includes(kw);
+                  const wasSearched = searchedKeywords.includes(kw);
+                  return (
+                    <button
+                      key={kw}
+                      type="button"
+                      onClick={() => addSuggestedKeyword(kw)}
+                      disabled={isStreaming}
+                      className={`px-3 py-1 text-sm rounded-full transition-colors ${
+                        wasSearched
+                          ? 'bg-green-100 text-green-800 cursor-default'
+                          : isIncluded
+                          ? 'bg-blue-100 text-blue-800'
+                          : 'bg-gray-100 hover:bg-gray-200 text-gray-700'
+                      }`}
+                    >
+                      {wasSearched ? '✓ ' : isIncluded ? '⚡ ' : '+ '}
+                      {kw}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          <div className="grid sm:grid-cols-3 gap-4">
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">
                 <TrendingUp className="w-4 h-4 inline mr-1" />
@@ -345,6 +661,22 @@ export default function Discover() {
                 onChange={(e) => setMinTraffic(parseInt(e.target.value) || 0)}
                 min={0}
                 className="input"
+                disabled={isStreaming}
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                <Target className="w-4 h-4 inline mr-1" />
+                Max Results
+              </label>
+              <input
+                type="number"
+                value={maxResults}
+                onChange={(e) => setMaxResults(parseInt(e.target.value) || 50)}
+                min={10}
+                max={200}
+                className="input"
+                disabled={isStreaming}
               />
             </div>
             <div>
@@ -356,6 +688,7 @@ export default function Discover() {
                 value={language}
                 onChange={(e) => setLanguage(e.target.value)}
                 className="input"
+                disabled={isStreaming}
               >
                 <option value="">All Languages</option>
                 <option value="en">English</option>
@@ -381,7 +714,7 @@ export default function Discover() {
             </div>
           </div>
 
-          <div className="grid sm:grid-cols-2 gap-4">
+          <div className="grid sm:grid-cols-3 gap-4">
             <div className="flex items-center">
               <label className="flex items-center gap-2 cursor-pointer">
                 <input
@@ -389,6 +722,7 @@ export default function Discover() {
                   checked={filterCorporate}
                   onChange={(e) => setFilterCorporate(e.target.checked)}
                   className="w-4 h-4 text-primary-600 rounded border-gray-300 focus:ring-primary-500"
+                  disabled={isStreaming}
                 />
                 <span className="text-sm font-medium text-gray-700">
                   <Filter className="w-4 h-4 inline mr-1" />
@@ -403,53 +737,147 @@ export default function Discover() {
                   checked={excludeWordPressCom}
                   onChange={(e) => setExcludeWordPressCom(e.target.checked)}
                   className="w-4 h-4 text-primary-600 rounded border-gray-300 focus:ring-primary-500"
+                  disabled={isStreaming}
                 />
                 <span className="text-sm font-medium text-gray-700">
                   <Globe className="w-4 h-4 inline mr-1" />
                   Self-hosted Only
                 </span>
               </label>
-              <span className="ml-1 text-xs text-gray-500" title="Exclude *.wordpress.com hosted blogs">
-                (no wordpress.com)
+            </div>
+            <div className="flex items-center">
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={autoSearchExpanded}
+                  onChange={(e) => setAutoSearchExpanded(e.target.checked)}
+                  className="w-4 h-4 text-primary-600 rounded border-gray-300 focus:ring-primary-500"
+                  disabled={isStreaming}
+                />
+                <span className="text-sm font-medium text-gray-700">
+                  <Zap className="w-4 h-4 inline mr-1" />
+                  Auto-expand Keywords
+                </span>
+              </label>
+              <span className="ml-1 text-xs text-gray-500" title="Automatically search with AI-suggested keywords">
+                (AI)
               </span>
             </div>
           </div>
 
-          <button
-            type="submit"
-            disabled={!keywords.trim() || discoverMutation.isPending}
-            className="btn btn-primary flex items-center gap-2"
-          >
-            {discoverMutation.isPending ? (
-              <>
-                <Loader2 className="w-4 h-4 animate-spin" />
-                Discovering & Analyzing...
-              </>
-            ) : (
-              <>
+          <div className="flex gap-2">
+            {!isStreaming ? (
+              <button
+                type="submit"
+                disabled={!keywords.trim()}
+                className="btn btn-primary flex items-center gap-2"
+              >
                 <Search className="w-4 h-4" />
                 Discover Bloggers
-              </>
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={stopDiscovery}
+                className="btn bg-red-600 hover:bg-red-700 text-white flex items-center gap-2"
+              >
+                <X className="w-4 h-4" />
+                Stop Discovery
+              </button>
             )}
-          </button>
+          </div>
         </form>
       </div>
 
-      {/* Results */}
-      {discoverMutation.isError && (
-        <div className="flex items-center gap-2 p-4 bg-red-50 text-red-700 rounded-lg">
-          <AlertCircle className="w-5 h-5" />
-          <span>Failed to discover leads. Please try again.</span>
+      {/* Live Log Display */}
+      {(isStreaming || logs.length > 0) && (
+        <div className="card p-0 overflow-hidden">
+          <button
+            onClick={() => setShowLogs(!showLogs)}
+            className="w-full flex items-center justify-between p-4 border-b border-gray-200 bg-gray-50 hover:bg-gray-100 transition-colors"
+          >
+            <div className="flex items-center gap-2">
+              <Terminal className="w-4 h-4 text-gray-600" />
+              <span className="font-semibold text-gray-900">Discovery Log</span>
+              {isStreaming && (
+                <span className="flex items-center gap-1 text-sm text-blue-600">
+                  <Activity className="w-3 h-3 animate-pulse" />
+                  Live
+                </span>
+              )}
+              <span className="text-xs text-gray-500 ml-2">
+                ({logs.length} entries)
+              </span>
+              {discoveredLeads.length > 0 && isStreaming && (
+                <span className="flex items-center gap-1 text-sm text-green-600 ml-2">
+                  <CheckCircle className="w-3 h-3" />
+                  {discoveredLeads.length} leads found
+                </span>
+              )}
+            </div>
+            {showLogs ? (
+              <ChevronUp className="w-4 h-4 text-gray-400" />
+            ) : (
+              <ChevronDown className="w-4 h-4 text-gray-400" />
+            )}
+          </button>
+          
+          {showLogs && (
+            <div className="bg-gray-900 text-gray-100 p-4 max-h-80 overflow-y-auto font-mono text-xs">
+              {logs.length === 0 ? (
+                <div className="text-gray-500">Waiting for discovery to start...</div>
+              ) : (
+                logs.map((log, index) => (
+                  <div key={index} className="flex items-start gap-2 py-1 border-b border-gray-800 last:border-0">
+                    <span className="text-gray-500 shrink-0 w-20">
+                      {new Date(log.timestamp).toLocaleTimeString()}
+                    </span>
+                    <span className="shrink-0">{getLogIcon(log.type)}</span>
+                    <span className={
+                      log.type === 'error' ? 'text-red-400' :
+                      log.type === 'warning' ? 'text-yellow-400' :
+                      log.type === 'success' ? 'text-green-400' :
+                      log.type === 'progress' ? 'text-blue-400' :
+                      'text-gray-300'
+                    }>
+                      {log.message}
+                      {log.details && Object.keys(log.details).length > 0 && (
+                        <span className="text-gray-500 ml-2">
+                          {typeof log.details.elapsed === 'number' && (
+                            <span className="text-cyan-400">[{(log.details.elapsed as number / 1000).toFixed(1)}s]</span>
+                          )}
+                          {typeof log.details.count === 'number' && (
+                            <span className="text-purple-400 ml-1">({log.details.count} results)</span>
+                          )}
+                        </span>
+                      )}
+                    </span>
+                  </div>
+                ))
+              )}
+              {isStreaming && (
+                <div className="flex items-center gap-2 py-2 text-blue-400 animate-pulse">
+                  <Loader2 className="w-3 h-3 animate-spin" />
+                  <span>Waiting for AI response...</span>
+                </div>
+              )}
+              <div ref={logsEndRef} />
+            </div>
+          )}
         </div>
       )}
 
       {/* Stats Banner */}
       {discoveredLeads.length > 0 && (
-        <div className="flex items-center gap-4 p-4 bg-gradient-to-r from-primary-50 to-purple-50 rounded-lg">
+        <div className="flex items-center gap-4 p-4 bg-gradient-to-r from-primary-50 to-purple-50 rounded-lg flex-wrap">
           <div className="flex items-center gap-2">
-            <CheckCircle className="w-5 h-5 text-green-600" />
+            {isStreaming ? (
+              <Loader2 className="w-5 h-5 text-blue-600 animate-spin" />
+            ) : (
+              <CheckCircle className="w-5 h-5 text-green-600" />
+            )}
             <span className="font-medium text-gray-900">
-              {isViewingFromHistory ? 'Loaded' : 'Found'} {discoveredLeads.length} {isViewingFromHistory ? 'unsaved' : 'potential'} bloggers
+              {isViewingFromHistory ? 'Loaded' : isStreaming ? 'Finding' : 'Found'} {discoveredLeads.length} {isViewingFromHistory ? 'unsaved' : 'potential'} bloggers
             </span>
           </div>
           {isViewingFromHistory && (
@@ -463,6 +891,14 @@ export default function Discover() {
               <Building2 className="w-4 h-4" />
               <span className="text-sm">
                 {filteredOutCount} corporate sites filtered out
+              </span>
+            </div>
+          )}
+          {searchedKeywords.length > 0 && (
+            <div className="flex items-center gap-2 text-purple-600">
+              <Tag className="w-4 h-4" />
+              <span className="text-sm">
+                {searchedKeywords.length} keywords searched
               </span>
             </div>
           )}
@@ -534,7 +970,7 @@ export default function Discover() {
                   <div className="flex items-center gap-2 mb-1 flex-wrap">
                     {getBlogTypeIcon(lead.blogType)}
                     <p className="font-medium text-gray-900 truncate">
-                      {lead.title || lead.url}
+                      {highlightKeyword(lead.title || lead.url, lead.matchedKeyword)}
                     </p>
                     {lead.isWordPress && (
                       <span className="badge badge-success text-xs">WordPress</span>
@@ -552,11 +988,17 @@ export default function Discover() {
                         Has Email
                       </span>
                     )}
+                    {lead.matchedKeyword && (
+                      <span className="badge bg-yellow-100 text-yellow-800 text-xs flex items-center gap-1">
+                        <Tag className="w-3 h-3" />
+                        {lead.matchedKeyword}
+                      </span>
+                    )}
                   </div>
                   <p className="text-sm text-gray-500 truncate">{lead.url}</p>
                   {lead.description && (
                     <p className="text-sm text-gray-600 mt-1 line-clamp-2">
-                      {lead.description}
+                      {highlightKeyword(lead.description, lead.matchedKeyword)}
                     </p>
                   )}
                   {lead.blogClassification?.niche && (
@@ -629,7 +1071,7 @@ export default function Discover() {
       )}
 
       {/* Empty state */}
-      {!discoverMutation.isPending && discoveredLeads.length === 0 && (
+      {!isStreaming && discoveredLeads.length === 0 && logs.length === 0 && (
         <div className="card text-center py-12">
           <Globe className="w-12 h-12 text-gray-300 mx-auto mb-4" />
           <h3 className="text-lg font-medium text-gray-900 mb-2">
@@ -640,6 +1082,10 @@ export default function Discover() {
             Our AI will analyze each site to identify personal bloggers 
             who are good collaboration targets, filtering out corporate sites.
           </p>
+          <div className="mt-4 text-sm text-gray-400">
+            <Zap className="w-4 h-4 inline mr-1" />
+            Enable "Auto-expand Keywords" to automatically search with AI-suggested related terms
+          </div>
         </div>
       )}
 
@@ -675,6 +1121,12 @@ export default function Discover() {
                   {selectedAnalysis.url}
                   <ExternalLink className="w-3 h-3" />
                 </a>
+                {selectedAnalysis.matchedKeyword && (
+                  <p className="text-sm text-yellow-700 mt-2 flex items-center gap-1">
+                    <Tag className="w-3 h-3" />
+                    Found with keyword: <mark className="bg-yellow-200 px-1 rounded">{selectedAnalysis.matchedKeyword}</mark>
+                  </p>
+                )}
                 {selectedAnalysis.description && (
                   <p className="text-sm text-gray-600 mt-2">{selectedAnalysis.description}</p>
                 )}

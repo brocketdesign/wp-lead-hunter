@@ -12,18 +12,13 @@ export interface ILead extends Document {
   // WordPress detection
   isWordPress: boolean;
   
-  // Blog classification (OpenAI analysis)
+  // Blog classification (from OpenAI web search analysis)
   blogType: 'personal' | 'indie' | 'corporate' | 'unknown';
-  blogClassification?: {
-    isPersonalBlog: boolean;
-    isCorporateSite: boolean;
-    confidence: number;
-    reasoning: string;
-    niche?: string;
-    estimatedAudience?: string;
-    isGoodCollaborationTarget?: boolean;
-    collaborationPotentialReason?: string;
-  };
+  niche?: string;
+  wpConfidenceScore?: number;
+  isGoodCollaborationTarget?: boolean;
+  collaborationReason?: string;
+  estimatedAudience?: string;
   
   // Full analysis data (cached to avoid re-analysis)
   analysisData?: {
@@ -101,16 +96,11 @@ const leadSchema = new Schema<ILead>(
       enum: ['personal', 'indie', 'corporate', 'unknown'],
       default: 'unknown',
     },
-    blogClassification: {
-      isPersonalBlog: Boolean,
-      isCorporateSite: Boolean,
-      confidence: Number,
-      reasoning: String,
-      niche: String,
-      estimatedAudience: String,
-      isGoodCollaborationTarget: Boolean,
-      collaborationPotentialReason: String,
-    },
+    niche: String,
+    wpConfidenceScore: Number,
+    isGoodCollaborationTarget: Boolean,
+    collaborationReason: String,
+    estimatedAudience: String,
     
     // Full analysis data (cached)
     analysisData: {

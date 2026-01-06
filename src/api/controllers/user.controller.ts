@@ -37,6 +37,9 @@ export class UserController {
           notionKeyPreview: settings.notionApiKey
             ? settings.notionApiKey.slice(0, 7) + '...' + settings.notionApiKey.slice(-4)
             : '',
+          // Email templates status
+          emailTemplatesInitialized: settings.emailTemplatesInitialized || false,
+          emailTemplatesInitializedAt: settings.emailTemplatesInitializedAt || null,
         },
       });
     } catch (error) {
