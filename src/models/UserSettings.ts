@@ -4,6 +4,7 @@ export interface IUserSettings extends Document {
   clerkUserId: string;
   email: string;
   openaiApiKey?: string;
+  firecrawlApiKey?: string;
   notionApiKey?: string;
   notionDatabaseId?: string;
   // Email template settings
@@ -26,6 +27,10 @@ const userSettingsSchema = new Schema<IUserSettings>(
       default: '',
     },
     openaiApiKey: {
+      type: String,
+      default: '',
+    },
+    firecrawlApiKey: {
       type: String,
       default: '',
     },
@@ -57,6 +62,9 @@ userSettingsSchema.methods.toSafeJSON = function () {
   // Mask API keys for display
   if (obj.openaiApiKey) {
     obj.openaiApiKey = obj.openaiApiKey.slice(0, 7) + '...' + obj.openaiApiKey.slice(-4);
+  }
+  if (obj.firecrawlApiKey) {
+    obj.firecrawlApiKey = obj.firecrawlApiKey.slice(0, 7) + '...' + obj.firecrawlApiKey.slice(-4);
   }
   if (obj.notionApiKey) {
     obj.notionApiKey = obj.notionApiKey.slice(0, 7) + '...' + obj.notionApiKey.slice(-4);

@@ -8,9 +8,11 @@ export default function Settings() {
   const queryClient = useQueryClient();
   
   const [openaiKey, setOpenaiKey] = useState('');
+  const [firecrawlKey, setFirecrawlKey] = useState('');
   const [notionKey, setNotionKey] = useState('');
   const [notionDbId, setNotionDbId] = useState('');
   const [showOpenaiKey, setShowOpenaiKey] = useState(false);
+  const [showFirecrawlKey, setShowFirecrawlKey] = useState(false);
   const [showNotionKey, setShowNotionKey] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
 
@@ -59,6 +61,12 @@ export default function Settings() {
     }
   };
 
+  const handleSaveFirecrawl = () => {
+    if (firecrawlKey) {
+      updateMutation.mutate({ firecrawlApiKey: firecrawlKey });
+    }
+  };
+
   const handleSaveNotion = () => {
     updateMutation.mutate({
       ...(notionKey && { notionApiKey: notionKey }),
@@ -68,6 +76,11 @@ export default function Settings() {
 
   const handleClearOpenAI = () => {
     updateMutation.mutate({ openaiApiKey: '' });
+  };
+
+  const handleClearFirecrawl = () => {
+    updateMutation.mutate({ firecrawlApiKey: '' });
+    setFirecrawlKey('');
   };
 
   const handleClearNotion = () => {
@@ -185,6 +198,85 @@ export default function Settings() {
           >
             OpenAI Dashboard
           </a>
+        </p>
+      </div>
+
+      {/* Firecrawl Configuration */}
+      <div className="card">
+        <div className="flex items-center gap-3 mb-4">
+          <div className="w-10 h-10 bg-orange-100 rounded-lg flex items-center justify-center">
+            <Key className="w-5 h-5 text-orange-600" />
+          </div>
+          <div>
+            <h2 className="text-lg font-semibold text-gray-900">Firecrawl API Key</h2>
+            <p className="text-sm text-gray-500">Required to run discovery agents (Firecrawl)</p>
+          </div>
+        </div>
+
+        {/* Current status */}
+        <div className="mb-4 p-3 bg-gray-50 rounded-lg">
+          <div className="flex items-center gap-2">
+            {settings?.hasFirecrawlKey ? (
+              <>
+                <Check className="w-4 h-4 text-green-600" />
+                <span className="text-sm text-gray-700">
+                  API Key configured: <code className="bg-gray-200 px-2 py-0.5 rounded">{settings.firecrawlKeyPreview}</code>
+                </span>
+              </>
+            ) : (
+              <>
+                <AlertCircle className="w-4 h-4 text-yellow-600" />
+                <span className="text-sm text-gray-700">No API key configured</span>
+              </>
+            )}
+          </div>
+        </div>
+
+        {/* Input field */}
+        <div className="space-y-3">
+          <div className="relative">
+            <input
+              type={showFirecrawlKey ? 'text' : 'password'}
+              value={firecrawlKey}
+              onChange={(e) => setFirecrawlKey(e.target.value)}
+              placeholder="fc_..."
+              className="input pr-10"
+            />
+            <button
+              type="button"
+              onClick={() => setShowFirecrawlKey(!showFirecrawlKey)}
+              className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
+            >
+              {showFirecrawlKey ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+            </button>
+          </div>
+          <div className="flex gap-2">
+            <button
+              onClick={handleSaveFirecrawl}
+              disabled={!firecrawlKey || updateMutation.isPending}
+              className="btn btn-primary flex items-center gap-2"
+            >
+              {updateMutation.isPending ? (
+                <Loader2 className="w-4 h-4 animate-spin" />
+              ) : (
+                <Save className="w-4 h-4" />
+              )}
+              Save Key
+            </button>
+            {settings?.hasFirecrawlKey && (
+              <button
+                onClick={handleClearFirecrawl}
+                disabled={updateMutation.isPending}
+                className="btn btn-danger"
+              >
+                Remove Key
+              </button>
+            )}
+          </div>
+        </div>
+
+        <p className="mt-4 text-xs text-gray-500">
+          Get your Firecrawl API key from your Firecrawl account dashboard.
         </p>
       </div>
 

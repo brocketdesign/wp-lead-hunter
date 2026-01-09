@@ -55,13 +55,35 @@ export function useApi() {
 // Types for API responses
 export interface UserSettings {
   hasOpenaiKey: boolean;
+  hasFirecrawlKey?: boolean;
   hasNotionKey: boolean;
   notionDatabaseId: string;
   openaiKeyPreview: string;
+  firecrawlKeyPreview?: string;
   notionKeyPreview: string;
   // Email templates
   emailTemplatesInitialized: boolean;
   emailTemplatesInitializedAt?: string;
+}
+
+export interface DiscoveryAgent {
+  _id: string;
+  clerkUserId: string;
+  name: string;
+  description: string;
+  firecrawlPrompt: string;
+  status: 'pending' | 'running' | 'completed' | 'failed';
+  results: Array<{
+    blog_name: string;
+    url: string;
+    contact_email?: string;
+    contact_form_link?: string;
+    platform?: string;
+    topics?: string;
+  }>;
+  error?: string;
+  createdAt: string;
+  completedAt?: string;
 }
 
 export interface EmailTemplateInitResult {

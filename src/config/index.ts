@@ -20,6 +20,10 @@ interface Config {
     apiKey: string;
   };
 
+  firecrawl: {
+    apiKey: string;
+  };
+
   notion: {
     apiKey: string;
     databaseId: string;
@@ -58,6 +62,10 @@ export const config: Config = {
 
   openai: {
     apiKey: getEnvVarOptional('OPENAI_API_KEY', ''),
+  },
+
+  firecrawl: {
+    apiKey: getEnvVarOptional('FIRECRAWL_API_KEY', ''),
   },
 
   notion: {

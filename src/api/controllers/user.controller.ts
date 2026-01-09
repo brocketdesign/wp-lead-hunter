@@ -29,10 +29,14 @@ export class UserController {
         success: true,
         data: {
           hasOpenaiKey: !!settings.openaiApiKey,
+          hasFirecrawlKey: !!settings.firecrawlApiKey,
           hasNotionKey: !!settings.notionApiKey,
           notionDatabaseId: settings.notionDatabaseId || '',
           openaiKeyPreview: settings.openaiApiKey 
             ? settings.openaiApiKey.slice(0, 7) + '...' + settings.openaiApiKey.slice(-4)
+            : '',
+          firecrawlKeyPreview: settings.firecrawlApiKey
+            ? settings.firecrawlApiKey.slice(0, 7) + '...' + settings.firecrawlApiKey.slice(-4)
             : '',
           notionKeyPreview: settings.notionApiKey
             ? settings.notionApiKey.slice(0, 7) + '...' + settings.notionApiKey.slice(-4)
@@ -58,13 +62,16 @@ export class UserController {
         return;
       }
 
-      const { openaiApiKey, notionApiKey, notionDatabaseId } = req.body;
+      const { openaiApiKey, firecrawlApiKey, notionApiKey, notionDatabaseId } = req.body;
 
       const updateData: Record<string, string> = {};
       
       // Only update fields that are provided
       if (openaiApiKey !== undefined) {
         updateData.openaiApiKey = openaiApiKey;
+      }
+      if (firecrawlApiKey !== undefined) {
+        updateData.firecrawlApiKey = firecrawlApiKey;
       }
       if (notionApiKey !== undefined) {
         updateData.notionApiKey = notionApiKey;
@@ -86,6 +93,7 @@ export class UserController {
         message: 'Settings updated successfully',
         data: {
           hasOpenaiKey: !!settings.openaiApiKey,
+          hasFirecrawlKey: !!settings.firecrawlApiKey,
           hasNotionKey: !!settings.notionApiKey,
           notionDatabaseId: settings.notionDatabaseId || '',
         },
