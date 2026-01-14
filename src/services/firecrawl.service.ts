@@ -119,17 +119,15 @@ export class FirecrawlService {
               // Normalize URL (remove trailing slash, lowercase domain, etc.)
               const normalizedUrl = this.normalizeUrl(blog.url);
               
-              // Check if URL already exists to preserve original scrapedAt
-              const existing = await ScrapedUrl.findOne({ url: normalizedUrl }).lean();
-              const scrapedAt = existing?.scrapedAt || new Date();
-
+              // Use update with upsert to create new entry or update existing one
+              // This tracks when the URL was most recently scraped and by which agent
               return ScrapedUrl.findOneAndUpdate(
                 { url: normalizedUrl },
                 {
                   url: normalizedUrl,
                   agentId: agentId,
                   clerkUserId: clerkUserId,
-                  scrapedAt: scrapedAt, // Preserve original date if exists, otherwise use new date
+                  scrapedAt: new Date(), // Update to latest scrape time
                 },
                 { upsert: true, new: true, setDefaultsOnInsert: true }
               );
