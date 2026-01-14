@@ -1,4 +1,5 @@
 import { v4 as uuidv4 } from 'uuid';
+import { Resend } from 'resend';
 import { Lead, EmailRecord, EmailStatus, EmailTemplate, EmailTemplateCategory } from '../types';
 import { 
   EmailTemplate as EmailTemplateModel, 
@@ -12,9 +13,47 @@ import logger from '../utils/logger';
 import { getErrorMessage } from '../utils/helpers';
 import openaiService from './openai.service';
 import notionService from './notion.service';
+import config from '../config';
+
+// Language options for email generation
+export const EMAIL_LANGUAGES = [
+  { code: 'en', name: 'English' },
+  { code: 'ja', name: 'Japanese (日本語)' },
+  { code: 'es', name: 'Spanish (Español)' },
+  { code: 'fr', name: 'French (Français)' },
+  { code: 'de', name: 'German (Deutsch)' },
+  { code: 'zh', name: 'Chinese (中文)' },
+  { code: 'ko', name: 'Korean (한국어)' },
+  { code: 'pt', name: 'Portuguese (Português)' },
+  { code: 'it', name: 'Italian (Italiano)' },
+  { code: 'ru', name: 'Russian (Русский)' },
+];
 
 export class EmailService {
   private templates: Map<string, EmailTemplate> = new Map();
+  private resendClient: Resend | null = null;
+
+  constructor() {
+    // Initialize Resend client if API key is available
+    if (config.resend?.apiKey) {
+      this.resendClient = new Resend(config.resend.apiKey);
+      logger.info('Resend client initialized');
+    }
+  }
+
+  /**
+   * Initialize Resend client with user's API key
+   */
+  initResendWithApiKey(apiKey: string): void {
+    this.resendClient = new Resend(apiKey);
+  }
+
+  /**
+   * Check if email sending is configured
+   */
+  isEmailSendingConfigured(): boolean {
+    return this.resendClient !== null;
+  }
 
   // Initialize default templates for a user
   async initializeTemplatesForUser(clerkUserId: string): Promise<{
@@ -57,13 +96,17 @@ export class EmailService {
     };
   }
 
-  async sendEmail(lead: Lead, templateId?: string): Promise<EmailRecord> {
+  async sendEmail(lead: Lead, templateId?: string, options?: {
+    language?: string;
+    fromEmail?: string;
+    fromName?: string;
+  }): Promise<EmailRecord> {
     logger.info(`Preparing email for lead ${lead.id}`);
 
     const template = templateId ? this.templates.get(templateId) : undefined;
 
-    // Generate personalized email
-    const { subject, body } = await openaiService.generatePersonalizedEmail(lead, template);
+    // Generate personalized email with language support
+    const { subject, body } = await openaiService.generatePersonalizedEmail(lead, template, options?.language);
 
     // Create email record
     const emailRecord: EmailRecord = {
@@ -75,8 +118,8 @@ export class EmailService {
     };
 
     try {
-      // In production, integrate with email service provider (SendGrid, AWS SES, etc.)
-      await this.sendViaProvider(lead, subject, body);
+      // Send via Resend if configured
+      await this.sendViaProvider(lead, subject, body, options);
 
       emailRecord.status = EmailStatus.SENT;
       logger.info(`Email sent to lead ${lead.id}`);
@@ -94,25 +137,101 @@ export class EmailService {
     return emailRecord;
   }
 
-  private async sendViaProvider(lead: Lead, subject: string, _body: string): Promise<void> {
-    // Placeholder for email provider integration
-    // In production, integrate with:
-    // - SendGrid
-    // - AWS SES
-    // - Mailgun
-    // - etc.
-
+  /**
+   * Send email via Resend API
+   */
+  private async sendViaProvider(
+    lead: Lead, 
+    subject: string, 
+    body: string,
+    options?: {
+      fromEmail?: string;
+      fromName?: string;
+    }
+  ): Promise<{ id?: string; success: boolean }> {
     if (!lead.email) {
       throw new Error('Lead has no email address');
     }
 
+    // Use Resend if client is configured
+    if (this.resendClient) {
+      const fromEmail = options?.fromEmail || config.resend?.fromEmail || 'onboarding@resend.dev';
+      const fromName = options?.fromName || config.resend?.fromName || 'WP Lead Hunter';
+      
+      try {
+        const result = await this.resendClient.emails.send({
+          from: `${fromName} <${fromEmail}>`,
+          to: [lead.email],
+          subject,
+          html: body.replace(/\n/g, '<br>'),
+          text: body,
+        });
+
+        logger.info('Email sent via Resend', {
+          to: lead.email,
+          subject,
+          resendId: result.data?.id,
+        });
+
+        return { id: result.data?.id, success: true };
+      } catch (error) {
+        logger.error('Resend email failed:', { error: getErrorMessage(error) });
+        throw error;
+      }
+    }
+
+    // Fallback: simulate sending if no provider is configured
     logger.info('Email send simulated (no provider configured)', {
       to: lead.email,
       subject,
     });
 
-    // Simulate sending
-    return Promise.resolve();
+    return { success: true };
+  }
+
+  /**
+   * Send bulk emails to multiple leads
+   */
+  async sendBulkEmails(
+    leads: Lead[],
+    templateId: string,
+    options: {
+      language?: string;
+      fromEmail?: string;
+      fromName?: string;
+      delayMs?: number;
+    }
+  ): Promise<{
+    sent: number;
+    failed: number;
+    results: Array<{ leadId: string; success: boolean; error?: string }>;
+  }> {
+    const results: Array<{ leadId: string; success: boolean; error?: string }> = [];
+    let sent = 0;
+    let failed = 0;
+
+    for (const lead of leads) {
+      try {
+        await this.sendEmail(lead, templateId, options);
+        results.push({ leadId: lead.id, success: true });
+        sent++;
+      } catch (error) {
+        results.push({ 
+          leadId: lead.id, 
+          success: false, 
+          error: getErrorMessage(error) 
+        });
+        failed++;
+      }
+
+      // Add delay between emails to avoid rate limiting
+      if (options.delayMs && options.delayMs > 0) {
+        await new Promise(resolve => setTimeout(resolve, options.delayMs));
+      }
+    }
+
+    logger.info(`Bulk email completed: ${sent} sent, ${failed} failed`);
+    return { sent, failed, results };
   }
 
   // ==================== Database-backed Template Methods ====================

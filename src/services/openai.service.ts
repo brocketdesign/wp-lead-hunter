@@ -20,14 +20,19 @@ export class OpenAIService {
 
   async generatePersonalizedEmail(
     lead: Lead,
-    template?: EmailTemplate
+    template?: EmailTemplate,
+    language?: string
   ): Promise<{ subject: string; body: string }> {
     if (!this.client) {
-      return this.generateFallbackEmail(lead, template);
+      return this.generateFallbackEmail(lead, template, language);
     }
 
     try {
-      const prompt = this.buildPrompt(lead, template);
+      const prompt = this.buildPrompt(lead, template, language);
+      
+      const languageInstruction = language && language !== 'en' 
+        ? `Write the email entirely in ${this.getLanguageName(language)}. ` 
+        : '';
 
       const response = await this.client.chat.completions.create({
         model: 'gpt-4',
@@ -35,7 +40,7 @@ export class OpenAIService {
           {
             role: 'system',
             content:
-              'You are a professional email copywriter specializing in outreach emails for blog partnerships and collaborations. Write personalized, engaging emails that are professional yet friendly.',
+              `You are a professional email copywriter specializing in outreach emails for blog partnerships and collaborations. ${languageInstruction}Write personalized, engaging emails that are professional yet friendly.`,
           },
           {
             role: 'user',
@@ -50,11 +55,30 @@ export class OpenAIService {
       return this.parseEmailContent(content);
     } catch (error) {
       logger.error('Error generating email with OpenAI:', { error: getErrorMessage(error) });
-      return this.generateFallbackEmail(lead, template);
+      return this.generateFallbackEmail(lead, template, language);
     }
   }
 
-  private buildPrompt(lead: Lead, template?: EmailTemplate): string {
+  private getLanguageName(code: string): string {
+    const languages: Record<string, string> = {
+      en: 'English',
+      ja: 'Japanese',
+      es: 'Spanish',
+      fr: 'French',
+      de: 'German',
+      zh: 'Chinese',
+      ko: 'Korean',
+      pt: 'Portuguese',
+      it: 'Italian',
+      ru: 'Russian',
+    };
+    return languages[code] || 'English';
+  }
+
+  private buildPrompt(lead: Lead, template?: EmailTemplate, language?: string): string {
+    const languageNote = language && language !== 'en' 
+      ? `\n\nIMPORTANT: Write the entire email in ${this.getLanguageName(language)}. The subject and body must be in ${this.getLanguageName(language)}.`
+      : '';
     // Build available data object for variable replacement
     const availableData = {
       name: lead.contactName || 'there',
@@ -117,10 +141,10 @@ INSTRUCTIONS:
 Return in this exact format:
 SUBJECT: [the complete subject line]
 BODY:
-[the complete email body]`;
+[the complete email body]${languageNote}`;
     }
 
-    return `Generate a professional outreach email for a WordPress blog partnership opportunity.
+    return `Generate a professional outreach email for a WordPress blog partnership opportunity.${languageNote}
 
 Target Blog Information:
 - Blog Name: ${availableData.title}
@@ -155,7 +179,8 @@ BODY:
 
   private generateFallbackEmail(
     lead: Lead,
-    template?: EmailTemplate
+    template?: EmailTemplate,
+    _language?: string
   ): { subject: string; body: string } {
     const blogName = lead.title || lead.domain;
     const contactName = lead.contactName || 'there';

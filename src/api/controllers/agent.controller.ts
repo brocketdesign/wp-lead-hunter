@@ -1,6 +1,6 @@
 import { Request, Response } from 'express';
 import OpenAI from 'openai';
-import { DiscoveryAgent, UserSettings, ScrapedUrl } from '../../models';
+import { DiscoveryAgent, UserSettings, ScrapedUrl, Lead } from '../../models';
 import firecrawlService from '../../services/firecrawl.service';
 import logger from '../../utils/logger';
 import { getErrorMessage } from '../../utils/helpers';
@@ -553,6 +553,126 @@ Create a JSON response with:
       res.status(500).json({
         success: false,
         error: 'Failed to fetch scraped URLs',
+        message: getErrorMessage(error),
+      });
+    }
+  }
+
+  /**
+   * Save firecrawl results as leads
+   */
+  async saveResultsAsLeads(req: Request, res: Response): Promise<void> {
+    try {
+      const { agentId, resultIndices } = req.body;
+      const userId = getUserId(req);
+
+      if (!userId) {
+        res.status(401).json({
+          success: false,
+          error: 'Unauthorized',
+        });
+        return;
+      }
+
+      if (!agentId) {
+        res.status(400).json({
+          success: false,
+          error: 'Agent ID is required',
+        });
+        return;
+      }
+
+      const agent = await DiscoveryAgent.findOne({
+        _id: agentId,
+        clerkUserId: userId,
+      });
+
+      if (!agent) {
+        res.status(404).json({
+          success: false,
+          error: 'Agent not found',
+        });
+        return;
+      }
+
+      const results = agent.results || [];
+      const indicesToSave = resultIndices && resultIndices.length > 0 
+        ? resultIndices 
+        : results.map((_: unknown, idx: number) => idx);
+
+      const savedLeads: any[] = [];
+      const errors: string[] = [];
+
+      for (const idx of indicesToSave) {
+        const result = results[idx];
+        if (!result) {
+          errors.push(`Index ${idx} not found in results`);
+          continue;
+        }
+
+        try {
+          // Extract domain from URL
+          let domain = '';
+          try {
+            const urlObj = new URL(result.url);
+            domain = urlObj.hostname.replace('www.', '');
+          } catch {
+            domain = result.url;
+          }
+
+          // Check if lead already exists
+          const existingLead = await Lead.findOne({
+            clerkUserId: userId,
+            domain,
+          });
+
+          if (existingLead) {
+            // Update existing lead
+            existingLead.title = result.blog_name || existingLead.title;
+            existingLead.email = result.contact_email || existingLead.email;
+            existingLead.niche = Array.isArray(result.topics) ? result.topics.join(', ') : (result.topics || existingLead.niche);
+            await existingLead.save();
+            savedLeads.push(existingLead);
+          } else {
+            // Create new lead from firecrawl result
+            const nicheValue = Array.isArray(result.topics) ? result.topics.join(', ') : result.topics;
+            const newLead = await Lead.create({
+              clerkUserId: userId,
+              url: result.url,
+              domain,
+              title: result.blog_name || domain,
+              email: result.contact_email,
+              isWordPress: result.platform?.toLowerCase().includes('wordpress') ?? true,
+              niche: nicheValue,
+              status: 'DISCOVERED',
+              tags: [],
+              source: `Firecrawl Agent: ${agent.name}`,
+              discoverySessionId: agentId,
+            });
+            savedLeads.push(newLead);
+          }
+        } catch (error: any) {
+          if (error.code === 11000) {
+            errors.push(`Lead for ${result.url} already exists`);
+          } else {
+            errors.push(`Error saving ${result.url}: ${error.message}`);
+          }
+        }
+      }
+
+      res.json({
+        success: true,
+        data: {
+          savedCount: savedLeads.length,
+          leads: savedLeads,
+          errors: errors.length > 0 ? errors : undefined,
+        },
+      });
+    } catch (error) {
+      logger.error('Error saving results as leads:', { error: getErrorMessage(error) });
+      res.status(500).json({
+        success: false,
+        error: 'Failed to save results as leads',
         message: getErrorMessage(error),
       });
     }

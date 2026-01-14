@@ -22,6 +22,8 @@ import {
   ChevronDown,
   ExternalLink,
   List,
+  UserPlus,
+  Check,
 } from 'lucide-react';
 import { useApi, UserSettings } from '../lib/api';
 import { cn } from '../lib/utils';
@@ -91,6 +93,7 @@ function DiscoverContent() {
   const [generatedConfig, setGeneratedConfig] = useState<GeneratedConfig | null>(null);
   const [selectedAgent, setSelectedAgent] = useState<string | null>(null);
   const [avoidScrapingSameUrl, setAvoidScrapingSameUrl] = useState(false);
+  const [savedResultIndices, setSavedResultIndices] = useState<Record<string, Set<number>>>({});
 
   // Fetch user settings to check for keys
   const {
@@ -192,6 +195,61 @@ function DiscoverContent() {
         type: 'error',
         title: 'Deletion Failed',
         message: error?.response?.data?.error || 'Failed to delete agent.',
+      });
+    },
+  });
+
+  // Save result as lead
+  const saveAsLeadMutation = useMutation({
+    mutationFn: ({ agentId, resultIndices }: { agentId: string; resultIndices: number[] }) =>
+      api.post('/agents/save-as-leads', { agentId, resultIndices }),
+    onSuccess: (res, { agentId, resultIndices }) => {
+      queryClient.invalidateQueries({ queryKey: ['leads'] });
+      // Track saved indices
+      setSavedResultIndices(prev => ({
+        ...prev,
+        [agentId]: new Set([...(prev[agentId] || []), ...resultIndices]),
+      }));
+      const data = res.data as { savedCount: number };
+      addToast({
+        type: 'success',
+        title: 'Saved to Leads',
+        message: `${data.savedCount} result(s) saved to your leads.`,
+      });
+    },
+    onError: (error: any) => {
+      addToast({
+        type: 'error',
+        title: 'Save Failed',
+        message: error?.response?.data?.error || 'Failed to save results as leads.',
+      });
+    },
+  });
+
+  // Save all results as leads
+  const saveAllAsLeadsMutation = useMutation({
+    mutationFn: (agentId: string) =>
+      api.post('/agents/save-as-leads', { agentId }),
+    onSuccess: (res, agentId) => {
+      queryClient.invalidateQueries({ queryKey: ['leads'] });
+      const agent = agents.find((a: any) => a._id === agentId);
+      const allIndices = (agent?.results || []).map((_: any, idx: number) => idx);
+      setSavedResultIndices(prev => ({
+        ...prev,
+        [agentId]: new Set(allIndices),
+      }));
+      const data = res.data as { savedCount: number };
+      addToast({
+        type: 'success',
+        title: 'All Results Saved',
+        message: `${data.savedCount} result(s) saved to your leads.`,
+      });
+    },
+    onError: (error: any) => {
+      addToast({
+        type: 'error',
+        title: 'Save Failed',
+        message: error?.response?.data?.error || 'Failed to save results as leads.',
       });
     },
   });
@@ -680,60 +738,107 @@ function DiscoverContent() {
                   </div>
                 ) : (
                   <div className="space-y-4">
-                    {(currentAgent.results || []).map((result: any, idx: number) => (
-                      <div key={idx} className="border border-gray-200 rounded-lg p-4 hover:shadow-md transition-shadow">
-                        <div className="flex items-start justify-between mb-3">
-                          <div className="flex-1 min-w-0">
-                            <h4 className="font-semibold text-gray-900 truncate">{result.blog_name || 'Unknown Blog'}</h4>
-                            <a
-                              href={result.url}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="text-sm text-blue-600 hover:text-blue-800 truncate block"
-                            >
-                              {result.url}
-                            </a>
-                          </div>
-                          <div className="flex items-center gap-2 text-sm text-gray-600">
-                            <span className="px-2 py-1 bg-green-100 text-green-800 rounded-full text-xs font-medium">
-                              WordPress
-                            </span>
-                          </div>
-                        </div>
-
-                        {result.topics && (
-                          <p className="text-sm text-gray-600 mb-3">
-                            <strong>Topics:</strong> {result.topics}
-                          </p>
+                    {/* Save All Button */}
+                    <div className="flex justify-end">
+                      <button
+                        onClick={() => saveAllAsLeadsMutation.mutate(currentAgent._id)}
+                        disabled={saveAllAsLeadsMutation.isPending}
+                        className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-green-600 rounded-lg hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                      >
+                        {saveAllAsLeadsMutation.isPending ? (
+                          <Loader2 className="w-4 h-4 animate-spin" />
+                        ) : (
+                          <UserPlus className="w-4 h-4" />
                         )}
+                        Save All to Leads
+                      </button>
+                    </div>
 
-                        <div className="grid grid-cols-2 gap-4 text-sm">
-                          <div>
-                            <span className="font-medium text-gray-700">Email:</span>
-                            <span className="ml-2 text-gray-900">
-                              {result.contact_email || 'Not found'}
-                            </span>
+                    {(currentAgent.results || []).map((result: any, idx: number) => {
+                      const isSaved = savedResultIndices[currentAgent._id]?.has(idx);
+                      return (
+                        <div key={idx} className="border border-gray-200 rounded-lg p-4 hover:shadow-md transition-shadow">
+                          <div className="flex items-start justify-between mb-3">
+                            <div className="flex-1 min-w-0">
+                              <h4 className="font-semibold text-gray-900 truncate">{result.blog_name || 'Unknown Blog'}</h4>
+                              <a
+                                href={result.url}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="text-sm text-blue-600 hover:text-blue-800 truncate block"
+                              >
+                                {result.url}
+                              </a>
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <span className="px-2 py-1 bg-green-100 text-green-800 rounded-full text-xs font-medium">
+                                WordPress
+                              </span>
+                              {/* Save to Lead Button */}
+                              <button
+                                onClick={() => saveAsLeadMutation.mutate({ 
+                                  agentId: currentAgent._id, 
+                                  resultIndices: [idx] 
+                                })}
+                                disabled={saveAsLeadMutation.isPending || isSaved}
+                                className={cn(
+                                  'flex items-center gap-1 px-3 py-1 text-xs font-medium rounded-lg transition-colors',
+                                  isSaved
+                                    ? 'bg-gray-100 text-gray-500 cursor-default'
+                                    : 'bg-green-50 text-green-700 hover:bg-green-100'
+                                )}
+                              >
+                                {isSaved ? (
+                                  <>
+                                    <Check className="w-3 h-3" />
+                                    Saved
+                                  </>
+                                ) : saveAsLeadMutation.isPending ? (
+                                  <Loader2 className="w-3 h-3 animate-spin" />
+                                ) : (
+                                  <>
+                                    <UserPlus className="w-3 h-3" />
+                                    Save to Leads
+                                  </>
+                                )}
+                              </button>
+                            </div>
                           </div>
-                          <div>
-                            <span className="font-medium text-gray-700">Contact Form:</span>
-                            <span className="ml-2 text-gray-900">
-                              {result.contact_form_link ? (
-                                <a
-                                  href={result.contact_form_link}
-                                  target="_blank"
-                                  rel="noopener noreferrer"
-                                  className="text-blue-600 hover:text-blue-800"
-                                >
-                                  Available
-                                </a>
-                              ) : (
-                                'Not found'
-                              )}
-                            </span>
+
+                          {result.topics && (
+                            <p className="text-sm text-gray-600 mb-3">
+                              <strong>Topics:</strong> {result.topics}
+                            </p>
+                          )}
+
+                          <div className="grid grid-cols-2 gap-4 text-sm">
+                            <div>
+                              <span className="font-medium text-gray-700">Email:</span>
+                              <span className="ml-2 text-gray-900">
+                                {result.contact_email || 'Not found'}
+                              </span>
+                            </div>
+                            <div>
+                              <span className="font-medium text-gray-700">Contact Form:</span>
+                              <span className="ml-2 text-gray-900">
+                                {result.contact_form_link ? (
+                                  <a
+                                    href={result.contact_form_link}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="text-blue-600 hover:text-blue-800"
+                                  >
+                                    Available
+                                  </a>
+                                ) : (
+                                  'Not found'
+                                )}
+                              </span>
+                            </div>
                           </div>
                         </div>
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 )}
               </div>

@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useApi, type UserSettings, type EmailTemplateInitResult } from '../lib/api';
-import { Key, Database, Eye, EyeOff, Save, Check, AlertCircle, Loader2, Mail, RefreshCw } from 'lucide-react';
+import { Key, Database, Eye, EyeOff, Save, Check, AlertCircle, Loader2, Mail, RefreshCw, Send } from 'lucide-react';
 
 export default function Settings() {
   const api = useApi();
@@ -12,10 +12,14 @@ export default function Settings() {
   const [notionKey, setNotionKey] = useState('');
   const [notionDbId, setNotionDbId] = useState('');
   const [seoreviewtoolsKey, setSeoreviewtoolsKey] = useState('');
+  const [resendKey, setResendKey] = useState('');
+  const [resendFromEmail, setResendFromEmail] = useState('');
+  const [resendFromName, setResendFromName] = useState('');
   const [showOpenaiKey, setShowOpenaiKey] = useState(false);
   const [showFirecrawlKey, setShowFirecrawlKey] = useState(false);
   const [showNotionKey, setShowNotionKey] = useState(false);
   const [showSeoreviewtoolsKey, setShowSeoreviewtoolsKey] = useState(false);
+  const [showResendKey, setShowResendKey] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
 
   // Fetch current settings
@@ -35,7 +39,16 @@ export default function Settings() {
 
   // Update settings mutation
   const updateMutation = useMutation({
-    mutationFn: (data: { openaiApiKey?: string; firecrawlApiKey?: string; notionApiKey?: string; notionDatabaseId?: string; seoreviewtoolsApiKey?: string }) =>
+    mutationFn: (data: { 
+      openaiApiKey?: string; 
+      firecrawlApiKey?: string; 
+      notionApiKey?: string; 
+      notionDatabaseId?: string; 
+      seoreviewtoolsApiKey?: string;
+      resendApiKey?: string;
+      resendFromEmail?: string;
+      resendFromName?: string;
+    }) =>
       api.put('/user/settings', data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['user-settings'] });
@@ -46,6 +59,7 @@ export default function Settings() {
       setNotionKey('');
       setFirecrawlKey('');
       setSeoreviewtoolsKey('');
+      setResendKey('');
     },
   });
 
@@ -101,6 +115,21 @@ export default function Settings() {
   const handleClearSeoreviewtools = () => {
     updateMutation.mutate({ seoreviewtoolsApiKey: '' });
     setSeoreviewtoolsKey('');
+  };
+
+  const handleSaveResend = () => {
+    updateMutation.mutate({
+      ...(resendKey && { resendApiKey: resendKey }),
+      ...(resendFromEmail && { resendFromEmail }),
+      ...(resendFromName && { resendFromName }),
+    });
+  };
+
+  const handleClearResend = () => {
+    updateMutation.mutate({ resendApiKey: '', resendFromEmail: '', resendFromName: '' });
+    setResendKey('');
+    setResendFromEmail('');
+    setResendFromName('');
   };
 
   if (isLoading) {
@@ -371,6 +400,129 @@ export default function Settings() {
 
         <p className="mt-4 text-xs text-gray-500">
           When configured, the Firecrawl discovery agents will use this API to get additional SEO metrics, domain age, and traffic estimates for discovered websites.
+        </p>
+      </div>
+
+      {/* Resend Email Configuration */}
+      <div className="card">
+        <div className="flex items-center gap-3 mb-4">
+          <div className="w-10 h-10 bg-indigo-100 rounded-lg flex items-center justify-center">
+            <Send className="w-5 h-5 text-indigo-600" />
+          </div>
+          <div>
+            <h2 className="text-lg font-semibold text-gray-900">Resend Email Service</h2>
+            <p className="text-sm text-gray-500">Configure email sending via Resend.com</p>
+          </div>
+        </div>
+
+        {/* Current status */}
+        <div className="mb-4 p-3 bg-gray-50 rounded-lg">
+          <div className="flex items-center gap-2">
+            {(settings as any)?.hasResendKey ? (
+              <>
+                <Check className="w-4 h-4 text-green-600" />
+                <span className="text-sm text-gray-700">
+                  API Key configured: <code className="bg-gray-200 px-2 py-0.5 rounded">{(settings as any).resendKeyPreview}</code>
+                </span>
+              </>
+            ) : (
+              <>
+                <AlertCircle className="w-4 h-4 text-yellow-600" />
+                <span className="text-sm text-gray-700">No API key configured - emails will be simulated</span>
+              </>
+            )}
+          </div>
+        </div>
+
+        {/* Input fields */}
+        <div className="space-y-4">
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              Resend API Key
+            </label>
+            <div className="relative">
+              <input
+                type={showResendKey ? 'text' : 'password'}
+                value={resendKey}
+                onChange={(e) => setResendKey(e.target.value)}
+                placeholder="re_..."
+                className="input pr-10"
+              />
+              <button
+                type="button"
+                onClick={() => setShowResendKey(!showResendKey)}
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
+              >
+                {showResendKey ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+              </button>
+            </div>
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              From Email Address
+            </label>
+            <input
+              type="email"
+              value={resendFromEmail}
+              onChange={(e) => setResendFromEmail(e.target.value)}
+              placeholder="hello@yourdomain.com"
+              className="input"
+            />
+            <p className="mt-1 text-xs text-gray-500">
+              Must be a verified domain in your Resend account
+            </p>
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              From Name
+            </label>
+            <input
+              type="text"
+              value={resendFromName}
+              onChange={(e) => setResendFromName(e.target.value)}
+              placeholder="Your Name or Company"
+              className="input"
+            />
+          </div>
+
+          <div className="flex gap-2">
+            <button
+              onClick={handleSaveResend}
+              disabled={updateMutation.isPending}
+              className="btn btn-primary flex items-center gap-2"
+            >
+              {updateMutation.isPending ? (
+                <Loader2 className="w-4 h-4 animate-spin" />
+              ) : (
+                <Save className="w-4 h-4" />
+              )}
+              Save Resend Settings
+            </button>
+            {(settings as any)?.hasResendKey && (
+              <button
+                onClick={handleClearResend}
+                disabled={updateMutation.isPending}
+                className="btn btn-danger"
+              >
+                Remove Settings
+              </button>
+            )}
+          </div>
+        </div>
+
+        <p className="mt-4 text-xs text-gray-500">
+          Get your API key from{' '}
+          <a
+            href="https://resend.com/api-keys"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-primary-600 hover:underline"
+          >
+            Resend Dashboard
+          </a>
+          . You'll also need to verify your sending domain.
         </p>
       </div>
 

@@ -5,9 +5,14 @@ const router = Router();
 
 // Email sending
 router.post('/send', emailController.sendEmail.bind(emailController));
+router.post('/send-with-resend', emailController.sendEmailWithResend.bind(emailController));
+router.post('/send-bulk', emailController.sendBulkEmails.bind(emailController));
 
 // Generate email with AI
 router.post('/generate', emailController.generateEmail.bind(emailController));
+
+// Get available languages for email generation
+router.get('/languages', emailController.getLanguages.bind(emailController));
 
 // Initialize default templates for user
 router.post('/templates/initialize', emailController.initializeTemplates.bind(emailController));

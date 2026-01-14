@@ -8,6 +8,10 @@ export interface IUserSettings extends Document {
   notionApiKey?: string;
   notionDatabaseId?: string;
   seoreviewtoolsApiKey?: string;
+  // Resend email settings
+  resendApiKey?: string;
+  resendFromEmail?: string;
+  resendFromName?: string;
   // Email template settings
   emailTemplatesInitialized: boolean;
   emailTemplatesInitializedAt?: Date;
@@ -47,6 +51,19 @@ const userSettingsSchema = new Schema<IUserSettings>(
       type: String,
       default: '',
     },
+    // Resend email settings
+    resendApiKey: {
+      type: String,
+      default: '',
+    },
+    resendFromEmail: {
+      type: String,
+      default: '',
+    },
+    resendFromName: {
+      type: String,
+      default: '',
+    },
     // Email template settings
     emailTemplatesInitialized: {
       type: Boolean,
@@ -76,6 +93,9 @@ userSettingsSchema.methods.toSafeJSON = function () {
   }
   if (obj.seoreviewtoolsApiKey) {
     obj.seoreviewtoolsApiKey = obj.seoreviewtoolsApiKey.slice(0, 7) + '...' + obj.seoreviewtoolsApiKey.slice(-4);
+  }
+  if (obj.resendApiKey) {
+    obj.resendApiKey = obj.resendApiKey.slice(0, 7) + '...' + obj.resendApiKey.slice(-4);
   }
   return obj;
 };

@@ -29,6 +29,12 @@ interface Config {
     databaseId: string;
   };
 
+  resend: {
+    apiKey: string;
+    fromEmail: string;
+    fromName: string;
+  };
+
   discovery: {
     minDomainAgeMonths: number;
     minTrafficThreshold: number;
@@ -71,6 +77,12 @@ export const config: Config = {
   notion: {
     apiKey: getEnvVarOptional('NOTION_API_KEY', ''),
     databaseId: getEnvVarOptional('NOTION_DATABASE_ID', ''),
+  },
+
+  resend: {
+    apiKey: getEnvVarOptional('RESEND_API_KEY', ''),
+    fromEmail: getEnvVarOptional('RESEND_FROM_EMAIL', 'onboarding@resend.dev'),
+    fromName: getEnvVarOptional('RESEND_FROM_NAME', 'WP Lead Hunter'),
   },
 
   discovery: {

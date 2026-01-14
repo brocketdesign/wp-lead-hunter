@@ -13,12 +13,29 @@ import {
   X,
   Check,
   Download,
+  Languages,
+  Copy,
 } from 'lucide-react';
 import { cn } from '../lib/utils';
+import { ToastProvider, useToast } from '../components/Toast';
 
-export default function Emails() {
+const languageOptions = [
+  { code: 'en', name: 'English' },
+  { code: 'ja', name: 'Japanese (日本語)' },
+  { code: 'es', name: 'Spanish (Español)' },
+  { code: 'fr', name: 'French (Français)' },
+  { code: 'de', name: 'German (Deutsch)' },
+  { code: 'zh', name: 'Chinese (中文)' },
+  { code: 'ko', name: 'Korean (한국어)' },
+  { code: 'pt', name: 'Portuguese (Português)' },
+  { code: 'it', name: 'Italian (Italiano)' },
+  { code: 'ru', name: 'Russian (Русский)' },
+];
+
+function EmailsContent() {
   const api = useApi();
   const queryClient = useQueryClient();
+  const { addToast } = useToast();
 
   const [showTemplateModal, setShowTemplateModal] = useState(false);
   const [editingTemplate, setEditingTemplate] = useState<EmailTemplate | null>(null);
@@ -31,6 +48,7 @@ export default function Emails() {
   const [showComposeModal, setShowComposeModal] = useState(false);
   const [selectedLeadId, setSelectedLeadId] = useState('');
   const [selectedTemplateId, setSelectedTemplateId] = useState('');
+  const [emailLanguage, setEmailLanguage] = useState('en');
   const [generatedEmail, setGeneratedEmail] = useState({ subject: '', body: '' });
 
   // Fetch templates
@@ -72,12 +90,30 @@ export default function Emails() {
 
   // Generate email mutation
   const generateMutation = useMutation({
-    mutationFn: (data: { leadId: string; templateId: string }) =>
+    mutationFn: (data: { leadId: string; templateId?: string; language?: string }) =>
       api.post<{ subject: string; body: string }>('/emails/generate', data),
     onSuccess: (response) => {
       if (response.data) {
         setGeneratedEmail(response.data);
+        addToast({ type: 'success', title: 'Generated', message: 'Email generated successfully' });
       }
+    },
+    onError: (error: any) => {
+      addToast({ type: 'error', title: 'Error', message: error?.message || 'Failed to generate email' });
+    },
+  });
+
+  // Send email mutation
+  const sendEmailMutation = useMutation({
+    mutationFn: (data: { leadId: string; subject: string; body: string }) =>
+      api.post('/emails/send-with-resend', data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['leads'] });
+      closeComposeModal();
+      addToast({ type: 'success', title: 'Sent', message: 'Email sent successfully' });
+    },
+    onError: (error: any) => {
+      addToast({ type: 'error', title: 'Error', message: error?.message || 'Failed to send email' });
     },
   });
 
@@ -123,6 +159,7 @@ export default function Emails() {
     setShowComposeModal(true);
     setSelectedLeadId('');
     setSelectedTemplateId('');
+    setEmailLanguage('en');
     setGeneratedEmail({ subject: '', body: '' });
   };
 
@@ -130,16 +167,33 @@ export default function Emails() {
     setShowComposeModal(false);
     setSelectedLeadId('');
     setSelectedTemplateId('');
+    setEmailLanguage('en');
     setGeneratedEmail({ subject: '', body: '' });
   };
 
   const handleGenerate = () => {
-    if (selectedLeadId && selectedTemplateId) {
+    if (selectedLeadId) {
       generateMutation.mutate({
         leadId: selectedLeadId,
-        templateId: selectedTemplateId,
+        templateId: selectedTemplateId || undefined,
+        language: emailLanguage,
       });
     }
+  };
+
+  const handleSendEmail = () => {
+    if (selectedLeadId && generatedEmail.subject && generatedEmail.body) {
+      sendEmailMutation.mutate({
+        leadId: selectedLeadId,
+        subject: generatedEmail.subject,
+        body: generatedEmail.body,
+      });
+    }
+  };
+
+  const copyToClipboard = () => {
+    navigator.clipboard.writeText(`Subject: ${generatedEmail.subject}\n\n${generatedEmail.body}`);
+    addToast({ type: 'success', title: 'Copied', message: 'Email copied to clipboard' });
   };
 
   return (
@@ -372,14 +426,14 @@ export default function Emails() {
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">
-                    Select Template
+                    Select Template (Optional)
                   </label>
                   <select
                     value={selectedTemplateId}
                     onChange={(e) => setSelectedTemplateId(e.target.value)}
                     className="input"
                   >
-                    <option value="">Choose a template...</option>
+                    <option value="">No template (AI generates)</option>
                     {templates.map((template) => (
                       <option key={template.id} value={template.id}>
                         {template.name}
@@ -389,10 +443,29 @@ export default function Emails() {
                 </div>
               </div>
 
+              {/* Language Selection */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  <Languages className="w-4 h-4 inline mr-1" />
+                  Email Language
+                </label>
+                <select
+                  value={emailLanguage}
+                  onChange={(e) => setEmailLanguage(e.target.value)}
+                  className="input"
+                >
+                  {languageOptions.map((lang) => (
+                    <option key={lang.code} value={lang.code}>
+                      {lang.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
               <button
                 onClick={handleGenerate}
-                disabled={!selectedLeadId || !selectedTemplateId || generateMutation.isPending}
-                className="btn btn-primary flex items-center gap-2"
+                disabled={!selectedLeadId || generateMutation.isPending}
+                className="btn btn-primary flex items-center gap-2 w-full"
               >
                 {generateMutation.isPending ? (
                   <>
@@ -436,9 +509,23 @@ export default function Emails() {
                     />
                   </div>
                   <div className="flex justify-end gap-2">
-                    <button className="btn btn-secondary">Copy to Clipboard</button>
-                    <button className="btn btn-primary flex items-center gap-2">
-                      <Send className="w-4 h-4" />
+                    <button 
+                      onClick={copyToClipboard}
+                      className="btn btn-secondary flex items-center gap-2"
+                    >
+                      <Copy className="w-4 h-4" />
+                      Copy to Clipboard
+                    </button>
+                    <button 
+                      onClick={handleSendEmail}
+                      disabled={sendEmailMutation.isPending}
+                      className="btn btn-primary flex items-center gap-2"
+                    >
+                      {sendEmailMutation.isPending ? (
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                      ) : (
+                        <Send className="w-4 h-4" />
+                      )}
                       Send Email
                     </button>
                   </div>
@@ -449,5 +536,13 @@ export default function Emails() {
         </div>
       )}
     </div>
+  );
+}
+
+export default function Emails() {
+  return (
+    <ToastProvider>
+      <EmailsContent />
+    </ToastProvider>
   );
 }

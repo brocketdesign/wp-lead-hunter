@@ -574,7 +574,7 @@ export class EmailController {
   // ==================== Generate Email ====================
   async generateEmail(req: Request, res: Response): Promise<void> {
     try {
-      const { leadId, templateId } = req.body;
+      const { leadId, templateId, language } = req.body;
 
       if (!leadId) {
         res.status(400).json({ error: 'Lead ID is required' });
@@ -607,21 +607,22 @@ export class EmailController {
         }
       }
 
-      // Generate the email using OpenAI
-      const { subject, body } = await openaiService.generatePersonalizedEmail(lead, template);
+      // Generate the email using OpenAI with language support
+      const { subject, body } = await openaiService.generatePersonalizedEmail(lead, template, language);
 
       // Increment template usage if a template was used
       if (templateId) {
         await emailService.incrementTemplateUsage(templateId);
       }
 
-      logger.info('Email generated successfully', { leadId, templateId, hasTemplate: !!template });
+      logger.info('Email generated successfully', { leadId, templateId, hasTemplate: !!template, language });
 
       res.json({
         success: true,
         data: {
           subject,
           body,
+          language: language || 'en',
         },
       });
     } catch (error) {
@@ -631,6 +632,163 @@ export class EmailController {
         message: error instanceof Error ? error.message : 'Unknown error',
       });
     }
+  }
+
+  // ==================== Send Email with Resend ====================
+  async sendEmailWithResend(req: Request, res: Response): Promise<void> {
+    try {
+      const clerkUserId = getUserId(req);
+      if (!clerkUserId) {
+        res.status(401).json({ error: 'Unauthorized' });
+        return;
+      }
+
+      const { leadId, subject, body, fromEmail, fromName } = req.body;
+
+      if (!leadId || !subject || !body) {
+        res.status(400).json({ error: 'Lead ID, subject, and body are required' });
+        return;
+      }
+
+      // Get the lead
+      const lead = await leadService.getLead(leadId);
+      if (!lead) {
+        res.status(404).json({ error: 'Lead not found' });
+        return;
+      }
+
+      if (!lead.email) {
+        res.status(400).json({ error: 'Lead has no email address' });
+        return;
+      }
+
+      // Check for Resend API key in user settings
+      const { UserSettings } = await import('../../models/UserSettings');
+      const settings = await UserSettings.findOne({ clerkUserId });
+      
+      if (settings?.resendApiKey) {
+        emailService.initResendWithApiKey(settings.resendApiKey);
+      }
+
+      // Send the email
+      const emailRecord = await emailService.sendEmail(lead, undefined, {
+        fromEmail: fromEmail || settings?.resendFromEmail,
+        fromName: fromName || settings?.resendFromName,
+      });
+
+      // Update lead status
+      lead.outreachAttempts += 1;
+      lead.lastOutreachDate = new Date();
+      if (lead.status === LeadStatus.QUALIFIED) {
+        lead.status = LeadStatus.CONTACTED;
+      }
+      await leadService.updateLead(leadId, lead);
+
+      res.json({
+        success: true,
+        data: emailRecord,
+      });
+    } catch (error) {
+      logger.error('Error sending email:', { error: getErrorMessage(error) });
+      res.status(500).json({
+        error: 'Failed to send email',
+        message: error instanceof Error ? error.message : 'Unknown error',
+      });
+    }
+  }
+
+  // ==================== Send Bulk Emails ====================
+  async sendBulkEmails(req: Request, res: Response): Promise<void> {
+    try {
+      const clerkUserId = getUserId(req);
+      if (!clerkUserId) {
+        res.status(401).json({ error: 'Unauthorized' });
+        return;
+      }
+
+      const { leadIds, templateId, language, fromEmail, fromName } = req.body;
+
+      if (!leadIds || !Array.isArray(leadIds) || leadIds.length === 0) {
+        res.status(400).json({ error: 'Lead IDs array is required' });
+        return;
+      }
+
+      if (!templateId) {
+        res.status(400).json({ error: 'Template ID is required for bulk emails' });
+        return;
+      }
+
+      // Get all leads
+      const leads = await Promise.all(
+        leadIds.map(id => leadService.getLead(id))
+      );
+
+      const validLeads = leads.filter((lead): lead is NonNullable<typeof lead> => 
+        lead !== null && !!lead.email
+      );
+
+      if (validLeads.length === 0) {
+        res.status(400).json({ error: 'No valid leads with email addresses found' });
+        return;
+      }
+
+      // Check for Resend API key
+      const { UserSettings } = await import('../../models/UserSettings');
+      const settings = await UserSettings.findOne({ clerkUserId });
+      
+      if (settings?.resendApiKey) {
+        emailService.initResendWithApiKey(settings.resendApiKey);
+      }
+
+      // Send bulk emails
+      const result = await emailService.sendBulkEmails(validLeads, templateId, {
+        language,
+        fromEmail: fromEmail || settings?.resendFromEmail,
+        fromName: fromName || settings?.resendFromName,
+        delayMs: 1000, // 1 second delay between emails to avoid rate limiting
+      });
+
+      // Update lead statuses
+      for (const leadResult of result.results) {
+        if (leadResult.success) {
+          const lead = validLeads.find(l => l.id === leadResult.leadId);
+          if (lead) {
+            lead.outreachAttempts += 1;
+            lead.lastOutreachDate = new Date();
+            if (lead.status === LeadStatus.QUALIFIED) {
+              lead.status = LeadStatus.CONTACTED;
+            }
+            await leadService.updateLead(leadResult.leadId, lead);
+          }
+        }
+      }
+
+      res.json({
+        success: true,
+        data: {
+          totalRequested: leadIds.length,
+          validLeads: validLeads.length,
+          sent: result.sent,
+          failed: result.failed,
+          results: result.results,
+        },
+      });
+    } catch (error) {
+      logger.error('Error sending bulk emails:', { error: getErrorMessage(error) });
+      res.status(500).json({
+        error: 'Failed to send bulk emails',
+        message: error instanceof Error ? error.message : 'Unknown error',
+      });
+    }
+  }
+
+  // ==================== Get Available Languages ====================
+  async getLanguages(_req: Request, res: Response): Promise<void> {
+    const { EMAIL_LANGUAGES } = await import('../../services/email.service');
+    res.json({
+      success: true,
+      data: EMAIL_LANGUAGES,
+    });
   }
 }
 

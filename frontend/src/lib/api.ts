@@ -58,11 +58,15 @@ export interface UserSettings {
   hasFirecrawlKey?: boolean;
   hasNotionKey: boolean;
   hasSeoreviewtoolsKey?: boolean;
+  hasResendKey?: boolean;
   notionDatabaseId: string;
+  resendFromEmail?: string;
+  resendFromName?: string;
   openaiKeyPreview: string;
   firecrawlKeyPreview?: string;
   notionKeyPreview: string;
   seoreviewtoolsKeyPreview?: string;
+  resendKeyPreview?: string;
   // Email templates
   emailTemplatesInitialized: boolean;
   emailTemplatesInitializedAt?: string;

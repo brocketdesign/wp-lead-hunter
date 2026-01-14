@@ -9,6 +9,9 @@ router.post('/generate-prompt', agentController.generatePrompt.bind(agentControl
 // Public endpoint for scraped URLs (for Firecrawl to check) - must be before /:id route
 router.get('/scraped-urls', agentController.getScrapedUrls.bind(agentController));
 
+// Save firecrawl results as leads
+router.post('/save-as-leads', agentController.saveResultsAsLeads.bind(agentController));
+
 // Agent CRUD operations
 router.post('/', agentController.createAgent.bind(agentController));
 router.get('/', agentController.getAgents.bind(agentController));

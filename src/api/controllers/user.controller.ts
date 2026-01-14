@@ -32,7 +32,10 @@ export class UserController {
           hasFirecrawlKey: !!settings.firecrawlApiKey,
           hasNotionKey: !!settings.notionApiKey,
           hasSeoreviewtoolsKey: !!settings.seoreviewtoolsApiKey,
+          hasResendKey: !!settings.resendApiKey,
           notionDatabaseId: settings.notionDatabaseId || '',
+          resendFromEmail: settings.resendFromEmail || '',
+          resendFromName: settings.resendFromName || '',
           openaiKeyPreview: settings.openaiApiKey 
             ? settings.openaiApiKey.slice(0, 7) + '...' + settings.openaiApiKey.slice(-4)
             : '',
@@ -44,6 +47,9 @@ export class UserController {
             : '',
           seoreviewtoolsKeyPreview: (settings.seoreviewtoolsApiKey && settings.seoreviewtoolsApiKey.length > 0)
             ? settings.seoreviewtoolsApiKey.slice(0, 7) + '...' + settings.seoreviewtoolsApiKey.slice(-4)
+            : '',
+          resendKeyPreview: settings.resendApiKey
+            ? settings.resendApiKey.slice(0, 7) + '...' + settings.resendApiKey.slice(-4)
             : '',
           // Email templates status
           emailTemplatesInitialized: settings.emailTemplatesInitialized || false,
@@ -66,7 +72,16 @@ export class UserController {
         return;
       }
 
-      const { openaiApiKey, firecrawlApiKey, notionApiKey, notionDatabaseId, seoreviewtoolsApiKey } = req.body;
+      const { 
+        openaiApiKey, 
+        firecrawlApiKey, 
+        notionApiKey, 
+        notionDatabaseId, 
+        seoreviewtoolsApiKey,
+        resendApiKey,
+        resendFromEmail,
+        resendFromName,
+      } = req.body;
 
       logger.info('Updating user settings', { 
         userId, 
@@ -75,6 +90,7 @@ export class UserController {
         hasNotionKey: notionApiKey !== undefined,
         hasNotionDbId: notionDatabaseId !== undefined,
         hasSeoreviewtoolsKey: seoreviewtoolsApiKey !== undefined,
+        hasResendKey: resendApiKey !== undefined,
       });
 
       const updateData: Record<string, string> = {};
@@ -94,6 +110,15 @@ export class UserController {
       }
       if (seoreviewtoolsApiKey !== undefined) {
         updateData.seoreviewtoolsApiKey = seoreviewtoolsApiKey;
+      }
+      if (resendApiKey !== undefined) {
+        updateData.resendApiKey = resendApiKey;
+      }
+      if (resendFromEmail !== undefined) {
+        updateData.resendFromEmail = resendFromEmail;
+      }
+      if (resendFromName !== undefined) {
+        updateData.resendFromName = resendFromName;
       }
 
       logger.info('Update data prepared', { updateDataKeys: Object.keys(updateData) });
@@ -119,7 +144,10 @@ export class UserController {
           hasFirecrawlKey: !!settings?.firecrawlApiKey,
           hasNotionKey: !!settings?.notionApiKey,
           hasSeoreviewtoolsKey: !!(settings?.seoreviewtoolsApiKey && settings.seoreviewtoolsApiKey.length > 0),
+          hasResendKey: !!settings?.resendApiKey,
           notionDatabaseId: settings?.notionDatabaseId || '',
+          resendFromEmail: settings?.resendFromEmail || '',
+          resendFromName: settings?.resendFromName || '',
         },
       });
     } catch (error) {
