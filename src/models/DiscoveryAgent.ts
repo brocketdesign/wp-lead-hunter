@@ -11,7 +11,7 @@ export interface IDiscoveredBlog {
   contact_form_link_citation?: string;
   platform?: string;
   platform_citation?: string;
-  topics?: string;
+  topics?: string | string[]; // Accept both string (from Firecrawl) and array (preferred format)
   topics_citation?: string;
   monthly_unique_users_approx?: string;
   monthly_unique_users_approx_citation?: string;
@@ -44,7 +44,10 @@ const discoveredBlogSchema = new Schema<IDiscoveredBlog>(
     contact_form_link_citation: String,
     platform: String,
     platform_citation: String,
-    topics: String,
+    topics: {
+      type: Schema.Types.Mixed,
+      // Accept both string (from Firecrawl) and array format
+    },
     topics_citation: String,
     monthly_unique_users_approx: String,
     monthly_unique_users_approx_citation: String,
