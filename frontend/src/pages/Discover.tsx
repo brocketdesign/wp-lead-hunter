@@ -20,6 +20,8 @@ import {
   Download,
   FileJson,
   ChevronDown,
+  ExternalLink,
+  List,
 } from 'lucide-react';
 import { useApi, UserSettings } from '../lib/api';
 import { cn } from '../lib/utils';
@@ -88,6 +90,7 @@ function DiscoverContent() {
   const [additionalRequirements, setAdditionalRequirements] = useState('');
   const [generatedConfig, setGeneratedConfig] = useState<GeneratedConfig | null>(null);
   const [selectedAgent, setSelectedAgent] = useState<string | null>(null);
+  const [avoidScrapingSameUrl, setAvoidScrapingSameUrl] = useState(false);
 
   // Fetch user settings to check for keys
   const {
@@ -130,7 +133,7 @@ function DiscoverContent() {
 
   // Create agent
   const createAgentMutation = useMutation({
-    mutationFn: (payload: { name: string; description: string; firecrawlPrompt: string; startImmediately?: boolean }) =>
+    mutationFn: (payload: { name: string; description: string; firecrawlPrompt: string; startImmediately?: boolean; avoidScrapingSameUrl?: boolean }) =>
       api.post('/agents', payload),
     onSuccess: (res) => {
       queryClient.invalidateQueries({ queryKey: ['agents'] });
@@ -495,12 +498,27 @@ function DiscoverContent() {
                     </p>
                   </div>
 
+                  {/* Avoid scraping same URL checkbox */}
+                  <div className="flex items-center gap-2 p-3 bg-gray-50 rounded-lg border border-gray-200">
+                    <input
+                      type="checkbox"
+                      id="avoidScrapingSameUrl"
+                      checked={avoidScrapingSameUrl}
+                      onChange={(e) => setAvoidScrapingSameUrl(e.target.checked)}
+                      className="w-4 h-4 text-green-600 border-gray-300 rounded focus:ring-green-500"
+                    />
+                    <label htmlFor="avoidScrapingSameUrl" className="text-sm font-medium text-gray-700 cursor-pointer">
+                      Avoid scraping the same URL
+                    </label>
+                  </div>
+
                   <button
                     onClick={() => createAgentMutation.mutate({
                       name: generatedConfig.name,
                       description: generatedConfig.description,
                       firecrawlPrompt: generatedConfig.prompt,
-                      startImmediately: true
+                      startImmediately: true,
+                      avoidScrapingSameUrl: avoidScrapingSameUrl
                     })}
                     disabled={createAgentMutation.isLoading || !hasFirecrawlApiKey}
                     className={cn(
@@ -535,11 +553,23 @@ function DiscoverContent() {
           {/* Agents List & Results */}
           <div className="space-y-6">
             <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
-              <div className="flex items-center gap-3 mb-6">
-                <div className="w-8 h-8 bg-purple-100 rounded-lg flex items-center justify-center">
-                  <Bot className="w-5 h-5 text-purple-600" />
+              <div className="flex items-center justify-between mb-6">
+                <div className="flex items-center gap-3">
+                  <div className="w-8 h-8 bg-purple-100 rounded-lg flex items-center justify-center">
+                    <Bot className="w-5 h-5 text-purple-600" />
+                  </div>
+                  <h2 className="text-xl font-semibold text-gray-900">Your Discovery Agents</h2>
                 </div>
-                <h2 className="text-xl font-semibold text-gray-900">Your Discovery Agents</h2>
+                <a
+                  href="/api/agents/scraped-urls"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-lg transition-colors"
+                >
+                  <List className="w-4 h-4" />
+                  View All Scraped URLs
+                  <ExternalLink className="w-4 h-4" />
+                </a>
               </div>
 
               {isLoadingAgents ? (

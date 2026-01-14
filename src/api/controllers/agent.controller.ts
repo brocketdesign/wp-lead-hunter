@@ -1,6 +1,6 @@
 import { Request, Response } from 'express';
 import OpenAI from 'openai';
-import { DiscoveryAgent, UserSettings } from '../../models';
+import { DiscoveryAgent, UserSettings, ScrapedUrl } from '../../models';
 import firecrawlService from '../../services/firecrawl.service';
 import logger from '../../utils/logger';
 import { getErrorMessage } from '../../utils/helpers';
@@ -64,15 +64,28 @@ Return ONLY valid JSON with this structure:
   "description": "Brief description of what this agent does"
 }`;
 
+      // Check if user has seoreviewtools API key
+      let seoreviewtoolsApiKey = '';
+      if (userId) {
+        const settings = await UserSettings.findOne({ clerkUserId: userId });
+        if (settings?.seoreviewtoolsApiKey) {
+          seoreviewtoolsApiKey = settings.seoreviewtoolsApiKey;
+        }
+      }
+
+      const seoreviewtoolsInstructions = seoreviewtoolsApiKey 
+        ? `\n\nIMPORTANT: You have access to the SEOReviewTools API. You can use this API to get detailed SEO and traffic data for websites. The API key is: ${seoreviewtoolsApiKey}. When you find a blog URL, you can use the SEOReviewTools API to get additional information like domain age, traffic estimates, and SEO metrics. Include instructions in the prompt for the agent to use this API when available.`
+        : '';
+
       const userMessage = `Generate a Firecrawl agent configuration for finding WordPress blogs with these criteria:
 - Niche/Topic: ${niche}
 - Language: ${language || 'English'}
 - Platform: ${platform || 'WordPress'}
 - Target Audience: ${targetAudience || 'Personal bloggers and small teams'}
-${additionalRequirements ? `- Additional Requirements: ${additionalRequirements}` : ''}
+${additionalRequirements ? `- Additional Requirements: ${additionalRequirements}` : ''}${seoreviewtoolsInstructions}
 
 Create a JSON response with:
-1. prompt: Detailed instructions for an AI web research agent. The agent should: (a) Search for WordPress blogs in the specified niche using search engines and blog directories, (b) Visit promising websites, (c) Extract structured data from each blog including blog name, URL, contact email, contact form link, topics/categories, (d) Only include blogs that are clearly WordPress sites with contact information available, (e) Focus on individual bloggers and small teams, not corporate sites, (f) Return results in the specified JSON format.
+1. prompt: Detailed instructions for an AI web research agent. The agent should: (a) Search for WordPress blogs in the specified niche using search engines and blog directories, (b) Visit promising websites, (c) Extract structured data from each blog including blog name, URL, contact email, contact form link, topics/categories, (d) Only include blogs that are clearly WordPress sites with contact information available, (e) Focus on individual bloggers and small teams, not corporate sites, (f) Return results in the specified JSON format.${seoreviewtoolsApiKey ? ' Additionally, the agent can use the SEOReviewTools API (API key provided below) to get SEO metrics, domain age, and traffic estimates for discovered websites. Include this capability in the prompt.' : ''}
 2. name: Concise agent name (max 50 chars) like "Anime Blog Hunter" or "Tech Review Finder"
 3. description: Brief description (max 100 chars) like "Discovers Japanese anime blogs for collaboration opportunities"`;
 
@@ -124,7 +137,7 @@ Create a JSON response with:
    */
   async createAgent(req: Request, res: Response): Promise<void> {
     try {
-      const { name, description, firecrawlPrompt, startImmediately = true } = req.body;
+      const { name, description, firecrawlPrompt, startImmediately = true, avoidScrapingSameUrl = false } = req.body;
 
       if (!name || !description || !firecrawlPrompt) {
         res.status(400).json({
@@ -155,6 +168,23 @@ Create a JSON response with:
         return;
       }
 
+      // Get base URL from request
+      const protocol = req.protocol || 'http';
+      const host = req.get('host') || `localhost:${config.port}`;
+      const baseUrl = `${protocol}://${host}`;
+      const scrapedUrlsUrl = `${baseUrl}/api/agents/scraped-urls`;
+
+      // Enhance prompt with seoreviewtools API key if available
+      let enhancedPrompt = firecrawlPrompt;
+      if (settings?.seoreviewtoolsApiKey) {
+        enhancedPrompt = `${firecrawlPrompt}\n\nIMPORTANT: You have access to the SEOReviewTools API to get detailed SEO and traffic data for websites. API Key: ${settings.seoreviewtoolsApiKey}. When you discover a blog URL, you can use the SEOReviewTools API to get additional information like domain age, traffic estimates, and SEO metrics. Use this API to enrich the data you collect about each blog.`;
+      }
+
+      // Add URL exclusion list if checkbox is enabled
+      if (avoidScrapingSameUrl) {
+        enhancedPrompt = `${enhancedPrompt}\n\nIMPORTANT: To avoid scraping URLs that have already been scraped, check the following URL before scraping any website: ${scrapedUrlsUrl}\nThis endpoint returns a JSON object with a "urls" array containing all previously scraped URLs. Before scraping a URL, check if it exists in this list. If it does, skip it and find another URL to scrape.`;
+      }
+
       // Create the agent
       const agent = await DiscoveryAgent.create({
         clerkUserId: userId,
@@ -168,7 +198,7 @@ Create a JSON response with:
       if (startImmediately) {
         // Initialize Firecrawl with user's API key
         firecrawlService.initWithApiKey(firecrawlApiKey);
-        firecrawlService.runAgentAsync(agent._id.toString(), firecrawlPrompt);
+        firecrawlService.runAgentAsync(agent._id.toString(), enhancedPrompt);
       }
 
       res.status(201).json({
@@ -344,6 +374,12 @@ Create a JSON response with:
         return;
       }
 
+      // Enhance prompt with seoreviewtools API key if available
+      let enhancedPrompt = agent.firecrawlPrompt;
+      if (settings?.seoreviewtoolsApiKey) {
+        enhancedPrompt = `${agent.firecrawlPrompt}\n\nIMPORTANT: You have access to the SEOReviewTools API to get detailed SEO and traffic data for websites. API Key: ${settings.seoreviewtoolsApiKey}. When you discover a blog URL, you can use the SEOReviewTools API to get additional information like domain age, traffic estimates, and SEO metrics. Use this API to enrich the data you collect about each blog.`;
+      }
+
       // Reset agent status and results
       agent.status = 'pending';
       agent.results = [];
@@ -353,7 +389,7 @@ Create a JSON response with:
 
       // Initialize Firecrawl and run
       firecrawlService.initWithApiKey(firecrawlApiKey);
-      firecrawlService.runAgentAsync(agent._id.toString(), agent.firecrawlPrompt);
+      firecrawlService.runAgentAsync(agent._id.toString(), enhancedPrompt);
 
       res.json({
         success: true,
@@ -490,6 +526,33 @@ Create a JSON response with:
       res.status(500).json({
         success: false,
         error: 'Failed to export results',
+        message: getErrorMessage(error),
+      });
+    }
+  }
+
+  /**
+   * Get all scraped URLs (public endpoint for Firecrawl)
+   */
+  async getScrapedUrls(_req: Request, res: Response): Promise<void> {
+    try {
+      const urls = await ScrapedUrl.find({})
+        .select('url scrapedAt')
+        .sort({ scrapedAt: -1 })
+        .lean();
+
+      // Return simple array of URLs for easy consumption by Firecrawl
+      const urlList = urls.map(item => item.url);
+
+      res.json({
+        urls: urlList,
+        count: urlList.length,
+      });
+    } catch (error) {
+      logger.error('Error fetching scraped URLs:', { error: getErrorMessage(error) });
+      res.status(500).json({
+        success: false,
+        error: 'Failed to fetch scraped URLs',
         message: getErrorMessage(error),
       });
     }
