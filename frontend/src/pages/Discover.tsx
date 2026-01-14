@@ -17,10 +17,14 @@ import {
   Users,
   FileText,
   Zap,
+  Download,
+  FileJson,
+  ChevronDown,
 } from 'lucide-react';
 import { useApi, UserSettings } from '../lib/api';
 import { cn } from '../lib/utils';
 import { ToastProvider, useToast } from '../components/Toast';
+import { useAuth } from '@clerk/clerk-react';
 
 interface BlogClassification {
   isPersonalBlog: boolean;
@@ -75,6 +79,7 @@ function DiscoverContent() {
   const api = useApi();
   const queryClient = useQueryClient();
   const { addToast } = useToast();
+  const { getToken } = useAuth();
 
   // Form state
   const [niche, setNiche] = useState('');
@@ -191,6 +196,44 @@ function DiscoverContent() {
   const agents = agentsData?.data || [];
   const currentAgent = agents.find((a: any) => a._id === selectedAgent) || null;
 
+  // Handle export downloads
+  const handleExport = async (agentId: string, format: 'json' | 'csv') => {
+    try {
+      const token = await getToken();
+      const response = await fetch(`/api/agents/${agentId}/export/${format}`, {
+        headers: {
+          ...(token && { Authorization: `Bearer ${token}` }),
+        },
+      });
+
+      if (!response.ok) {
+        throw new Error('Export failed');
+      }
+
+      const blob = await response.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `agent-${agentId}-results.${format}`;
+      document.body.appendChild(a);
+      a.click();
+      window.URL.revokeObjectURL(url);
+      document.body.removeChild(a);
+
+      addToast({
+        type: 'success',
+        title: 'Export Successful',
+        message: `Results exported as ${format.toUpperCase()}`,
+      });
+    } catch (error: any) {
+      addToast({
+        type: 'error',
+        title: 'Export Failed',
+        message: error?.message || 'Failed to export results',
+      });
+    }
+  };
+
   const getStatusColor = (status: string) => {
     switch (status) {
       case 'completed':
@@ -300,19 +343,22 @@ function DiscoverContent() {
                     <Globe className="w-4 h-4 inline mr-2" />
                     Content Language
                   </label>
-                  <select
-                    value={language}
-                    onChange={(e) => setLanguage(e.target.value)}
-                    className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500 transition-colors"
-                    disabled={!hasOpenAIApiKey}
-                  >
-                    <option value="ja">Japanese (日本語)</option>
-                    <option value="en">English</option>
-                    <option value="es">Spanish (Español)</option>
-                    <option value="fr">French (Français)</option>
-                    <option value="de">German (Deutsch)</option>
-                    <option value="other">Other</option>
-                  </select>
+                  <div className="relative">
+                    <select
+                      value={language}
+                      onChange={(e) => setLanguage(e.target.value)}
+                      className="w-full px-4 py-3 pr-10 border border-gray-300 rounded-lg bg-white focus:ring-2 focus:ring-primary-500 focus:border-primary-500 transition-all appearance-none cursor-pointer hover:border-gray-400"
+                      disabled={!hasOpenAIApiKey}
+                    >
+                      <option value="ja">Japanese (日本語)</option>
+                      <option value="en">English</option>
+                      <option value="es">Spanish (Español)</option>
+                      <option value="fr">French (Français)</option>
+                      <option value="de">German (Deutsch)</option>
+                      <option value="other">Other</option>
+                    </select>
+                    <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400 pointer-events-none" />
+                  </div>
                 </div>
 
                 {/* Target Audience */}
@@ -321,17 +367,20 @@ function DiscoverContent() {
                     <Users className="w-4 h-4 inline mr-2" />
                     Target Audience
                   </label>
-                  <select
-                    value={targetAudience}
-                    onChange={(e) => setTargetAudience(e.target.value)}
-                    className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500 transition-colors"
-                    disabled={!hasOpenAIApiKey}
-                  >
-                    <option value="Personal bloggers and small teams">Personal bloggers & small teams</option>
-                    <option value="Individual creators">Individual creators</option>
-                    <option value="Small businesses">Small businesses</option>
-                    <option value="Professional bloggers">Professional bloggers</option>
-                  </select>
+                  <div className="relative">
+                    <select
+                      value={targetAudience}
+                      onChange={(e) => setTargetAudience(e.target.value)}
+                      className="w-full px-4 py-3 pr-10 border border-gray-300 rounded-lg bg-white focus:ring-2 focus:ring-primary-500 focus:border-primary-500 transition-all appearance-none cursor-pointer hover:border-gray-400"
+                      disabled={!hasOpenAIApiKey}
+                    >
+                      <option value="Personal bloggers and small teams">Personal bloggers & small teams</option>
+                      <option value="Individual creators">Individual creators</option>
+                      <option value="Small businesses">Small businesses</option>
+                      <option value="Professional bloggers">Professional bloggers</option>
+                    </select>
+                    <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400 pointer-events-none" />
+                  </div>
                 </div>
 
                 {/* Additional Requirements */}
@@ -417,6 +466,33 @@ function DiscoverContent() {
                     <div className="px-4 py-3 bg-gray-50 border border-gray-200 rounded-lg text-gray-900 whitespace-pre-wrap text-sm max-h-40 overflow-y-auto">
                       {generatedConfig.prompt}
                     </div>
+                  </div>
+
+                  {/* JSON Result Format Preview */}
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                      <FileJson className="w-4 h-4 inline mr-2" />
+                      JSON Result Format Preview
+                    </label>
+                    <div className="px-4 py-3 bg-gray-900 border border-gray-700 rounded-lg text-gray-100 text-xs font-mono overflow-x-auto">
+                      <pre className="whitespace-pre-wrap">
+{JSON.stringify([
+  {
+    blog_name: "Example Blog Name",
+    url: "https://example.com",
+    contact_email: "contact@example.com",
+    contact_form_link: "https://example.com/contact",
+    platform: "WordPress",
+    topics: "Technology, AI",
+    monthly_unique_users_approx: "10,000",
+    has_profile_page: true
+  }
+], null, 2)}
+                      </pre>
+                    </div>
+                    <p className="text-xs text-gray-500 mt-1">
+                      This is the expected format of the results. Each agent will return an array of objects with these fields.
+                    </p>
                   </div>
 
                   <button
@@ -532,14 +608,34 @@ function DiscoverContent() {
             {/* Agent Results */}
             {currentAgent && (
               <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
-                <div className="flex items-center gap-3 mb-6">
-                  <div className="w-8 h-8 bg-indigo-100 rounded-lg flex items-center justify-center">
-                    <Zap className="w-5 h-5 text-indigo-600" />
+                <div className="flex items-center justify-between mb-6">
+                  <div className="flex items-center gap-3">
+                    <div className="w-8 h-8 bg-indigo-100 rounded-lg flex items-center justify-center">
+                      <Zap className="w-5 h-5 text-indigo-600" />
+                    </div>
+                    <div>
+                      <h3 className="text-xl font-semibold text-gray-900">{currentAgent.name}</h3>
+                      <p className="text-gray-600">Discovery Results</p>
+                    </div>
                   </div>
-                  <div>
-                    <h3 className="text-xl font-semibold text-gray-900">{currentAgent.name}</h3>
-                    <p className="text-gray-600">Discovery Results</p>
-                  </div>
+                  {(currentAgent.results || []).length > 0 && (
+                    <div className="flex gap-2">
+                      <button
+                        onClick={() => handleExport(currentAgent._id, 'json')}
+                        className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-blue-600 bg-blue-50 rounded-lg hover:bg-blue-100 transition-colors"
+                      >
+                        <FileJson className="w-4 h-4" />
+                        Export JSON
+                      </button>
+                      <button
+                        onClick={() => handleExport(currentAgent._id, 'csv')}
+                        className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-green-600 bg-green-50 rounded-lg hover:bg-green-100 transition-colors"
+                      >
+                        <Download className="w-4 h-4" />
+                        Export CSV
+                      </button>
+                    </div>
+                  )}
                 </div>
 
                 {(currentAgent.results || []).length === 0 ? (

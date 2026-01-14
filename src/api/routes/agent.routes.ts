@@ -15,4 +15,8 @@ router.delete('/:id', agentController.deleteAgent.bind(agentController));
 // Re-run an agent
 router.post('/:id/rerun', agentController.rerunAgent.bind(agentController));
 
+// Export agent results
+router.get('/:id/export/json', agentController.exportResultsJson.bind(agentController));
+router.get('/:id/export/csv', agentController.exportResultsCsv.bind(agentController));
+
 export default router;
