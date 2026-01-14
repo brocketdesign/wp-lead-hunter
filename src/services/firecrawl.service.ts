@@ -107,26 +107,60 @@ export class FirecrawlService {
       const clerkUserId = agent?.clerkUserId;
 
       // Save all URLs to the ScrapedUrl collection
-      if (blogs.length > 0) {
+      if (blogs.length > 0 && clerkUserId) {
         try {
-          const urlSaves = blogs.map(blog => {
-            return ScrapedUrl.findOneAndUpdate(
-              { url: blog.url },
-              {
-                url: blog.url,
-                agentId: agentId,
-                clerkUserId: clerkUserId,
-                scrapedAt: new Date(),
-              },
-              { upsert: true, new: true }
-            );
+          const urlSaves = blogs.map(async (blog) => {
+            if (!blog.url) {
+              logger.warn('Blog entry missing URL, skipping ScrapedUrl save');
+              return null;
+            }
+
+            try {
+              // Normalize URL (remove trailing slash, lowercase domain, etc.)
+              const normalizedUrl = this.normalizeUrl(blog.url);
+              
+              // Check if URL already exists to preserve original scrapedAt
+              const existing = await ScrapedUrl.findOne({ url: normalizedUrl }).lean();
+              const scrapedAt = existing?.scrapedAt || new Date();
+
+              return ScrapedUrl.findOneAndUpdate(
+                { url: normalizedUrl },
+                {
+                  url: normalizedUrl,
+                  agentId: agentId,
+                  clerkUserId: clerkUserId,
+                  scrapedAt: scrapedAt, // Preserve original date if exists, otherwise use new date
+                },
+                { upsert: true, new: true, setDefaultsOnInsert: true }
+              );
+            } catch (urlError) {
+              // Handle duplicate key errors gracefully
+              if ((urlError as any)?.code === 11000) {
+                logger.debug(`URL already exists in ScrapedUrl collection: ${blog.url}`);
+                return null;
+              }
+              throw urlError;
+            }
           });
-          await Promise.allSettled(urlSaves);
-          logger.info(`Saved ${blogs.length} URLs to ScrapedUrl collection`);
+
+          const results = await Promise.allSettled(urlSaves);
+          const successful = results.filter(r => r.status === 'fulfilled' && r.value !== null).length;
+          const failed = results.filter(r => r.status === 'rejected').length;
+
+          logger.info(`Saved ${successful} URLs to ScrapedUrl collection`, {
+            total: blogs.length,
+            successful,
+            failed,
+            skipped: blogs.length - successful - failed,
+          });
         } catch (error) {
-          logger.error(`Error saving URLs to ScrapedUrl collection:`, { error });
+          logger.error(`Error saving URLs to ScrapedUrl collection:`, { 
+            error: error instanceof Error ? error.message : error 
+          });
           // Don't fail the whole operation if URL saving fails
         }
+      } else if (blogs.length > 0 && !clerkUserId) {
+        logger.warn(`Cannot save URLs to ScrapedUrl collection: agent ${agentId} has no clerkUserId`);
       }
 
       // Update agent with results
@@ -150,6 +184,28 @@ export class FirecrawlService {
       });
 
       throw error;
+    }
+  }
+
+  /**
+   * Normalize URL for consistent storage
+   * Removes trailing slashes, converts to lowercase for domain, etc.
+   */
+  private normalizeUrl(url: string): string {
+    try {
+      const urlObj = new URL(url);
+      // Normalize the path (remove trailing slash except for root)
+      let path = urlObj.pathname;
+      if (path.length > 1 && path.endsWith('/')) {
+        path = path.slice(0, -1);
+      }
+      
+      // Reconstruct URL with normalized path
+      return `${urlObj.protocol}//${urlObj.host.toLowerCase()}${path}${urlObj.search}${urlObj.hash}`;
+    } catch (error) {
+      // If URL parsing fails, return as-is
+      logger.warn(`Failed to normalize URL: ${url}`, { error });
+      return url;
     }
   }
 
