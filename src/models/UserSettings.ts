@@ -7,6 +7,7 @@ export interface IUserSettings extends Document {
   firecrawlApiKey?: string;
   notionApiKey?: string;
   notionDatabaseId?: string;
+  seoreviewtoolsApiKey?: string;
   // Email template settings
   emailTemplatesInitialized: boolean;
   emailTemplatesInitializedAt?: Date;
@@ -42,6 +43,10 @@ const userSettingsSchema = new Schema<IUserSettings>(
       type: String,
       default: '',
     },
+    seoreviewtoolsApiKey: {
+      type: String,
+      default: '',
+    },
     // Email template settings
     emailTemplatesInitialized: {
       type: Boolean,
@@ -68,6 +73,9 @@ userSettingsSchema.methods.toSafeJSON = function () {
   }
   if (obj.notionApiKey) {
     obj.notionApiKey = obj.notionApiKey.slice(0, 7) + '...' + obj.notionApiKey.slice(-4);
+  }
+  if (obj.seoreviewtoolsApiKey) {
+    obj.seoreviewtoolsApiKey = obj.seoreviewtoolsApiKey.slice(0, 7) + '...' + obj.seoreviewtoolsApiKey.slice(-4);
   }
   return obj;
 };

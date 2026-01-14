@@ -11,9 +11,11 @@ export default function Settings() {
   const [firecrawlKey, setFirecrawlKey] = useState('');
   const [notionKey, setNotionKey] = useState('');
   const [notionDbId, setNotionDbId] = useState('');
+  const [seoreviewtoolsKey, setSeoreviewtoolsKey] = useState('');
   const [showOpenaiKey, setShowOpenaiKey] = useState(false);
   const [showFirecrawlKey, setShowFirecrawlKey] = useState(false);
   const [showNotionKey, setShowNotionKey] = useState(false);
+  const [showSeoreviewtoolsKey, setShowSeoreviewtoolsKey] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
 
   // Fetch current settings
@@ -33,7 +35,7 @@ export default function Settings() {
 
   // Update settings mutation
   const updateMutation = useMutation({
-    mutationFn: (data: { openaiApiKey?: string; notionApiKey?: string; notionDatabaseId?: string }) =>
+    mutationFn: (data: { openaiApiKey?: string; firecrawlApiKey?: string; notionApiKey?: string; notionDatabaseId?: string; seoreviewtoolsApiKey?: string }) =>
       api.put('/user/settings', data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['user-settings'] });
@@ -42,6 +44,8 @@ export default function Settings() {
       // Clear the input fields after saving
       setOpenaiKey('');
       setNotionKey('');
+      setFirecrawlKey('');
+      setSeoreviewtoolsKey('');
     },
   });
 
@@ -74,6 +78,12 @@ export default function Settings() {
     });
   };
 
+  const handleSaveSeoreviewtools = () => {
+    if (seoreviewtoolsKey) {
+      updateMutation.mutate({ seoreviewtoolsApiKey: seoreviewtoolsKey });
+    }
+  };
+
   const handleClearOpenAI = () => {
     updateMutation.mutate({ openaiApiKey: '' });
   };
@@ -86,6 +96,11 @@ export default function Settings() {
   const handleClearNotion = () => {
     updateMutation.mutate({ notionApiKey: '', notionDatabaseId: '' });
     setNotionDbId('');
+  };
+
+  const handleClearSeoreviewtools = () => {
+    updateMutation.mutate({ seoreviewtoolsApiKey: '' });
+    setSeoreviewtoolsKey('');
   };
 
   if (isLoading) {
@@ -277,6 +292,85 @@ export default function Settings() {
 
         <p className="mt-4 text-xs text-gray-500">
           Get your Firecrawl API key from your Firecrawl account dashboard.
+        </p>
+      </div>
+
+      {/* SEOReviewTools Configuration */}
+      <div className="card">
+        <div className="flex items-center gap-3 mb-4">
+          <div className="w-10 h-10 bg-blue-100 rounded-lg flex items-center justify-center">
+            <Key className="w-5 h-5 text-blue-600" />
+          </div>
+          <div>
+            <h2 className="text-lg font-semibold text-gray-900">SEOReviewTools API Key</h2>
+            <p className="text-sm text-gray-500">Optional: For enhanced SEO and traffic data in discovery agents</p>
+          </div>
+        </div>
+
+        {/* Current status */}
+        <div className="mb-4 p-3 bg-gray-50 rounded-lg">
+          <div className="flex items-center gap-2">
+            {settings?.hasSeoreviewtoolsKey ? (
+              <>
+                <Check className="w-4 h-4 text-green-600" />
+                <span className="text-sm text-gray-700">
+                  API Key configured: <code className="bg-gray-200 px-2 py-0.5 rounded">{settings.seoreviewtoolsKeyPreview}</code>
+                </span>
+              </>
+            ) : (
+              <>
+                <AlertCircle className="w-4 h-4 text-yellow-600" />
+                <span className="text-sm text-gray-700">No API key configured</span>
+              </>
+            )}
+          </div>
+        </div>
+
+        {/* Input field */}
+        <div className="space-y-3">
+          <div className="relative">
+            <input
+              type={showSeoreviewtoolsKey ? 'text' : 'password'}
+              value={seoreviewtoolsKey}
+              onChange={(e) => setSeoreviewtoolsKey(e.target.value)}
+              placeholder="Enter SEOReviewTools API key"
+              className="input pr-10"
+            />
+            <button
+              type="button"
+              onClick={() => setShowSeoreviewtoolsKey(!showSeoreviewtoolsKey)}
+              className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
+            >
+              {showSeoreviewtoolsKey ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+            </button>
+          </div>
+          <div className="flex gap-2">
+            <button
+              onClick={handleSaveSeoreviewtools}
+              disabled={!seoreviewtoolsKey || updateMutation.isPending}
+              className="btn btn-primary flex items-center gap-2"
+            >
+              {updateMutation.isPending ? (
+                <Loader2 className="w-4 h-4 animate-spin" />
+              ) : (
+                <Save className="w-4 h-4" />
+              )}
+              Save Key
+            </button>
+            {settings?.hasSeoreviewtoolsKey && (
+              <button
+                onClick={handleClearSeoreviewtools}
+                disabled={updateMutation.isPending}
+                className="btn btn-danger"
+              >
+                Remove Key
+              </button>
+            )}
+          </div>
+        </div>
+
+        <p className="mt-4 text-xs text-gray-500">
+          When configured, the Firecrawl discovery agents will use this API to get additional SEO metrics, domain age, and traffic estimates for discovered websites.
         </p>
       </div>
 

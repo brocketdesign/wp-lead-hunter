@@ -31,6 +31,7 @@ export class UserController {
           hasOpenaiKey: !!settings.openaiApiKey,
           hasFirecrawlKey: !!settings.firecrawlApiKey,
           hasNotionKey: !!settings.notionApiKey,
+          hasSeoreviewtoolsKey: !!settings.seoreviewtoolsApiKey,
           notionDatabaseId: settings.notionDatabaseId || '',
           openaiKeyPreview: settings.openaiApiKey 
             ? settings.openaiApiKey.slice(0, 7) + '...' + settings.openaiApiKey.slice(-4)
@@ -40,6 +41,9 @@ export class UserController {
             : '',
           notionKeyPreview: settings.notionApiKey
             ? settings.notionApiKey.slice(0, 7) + '...' + settings.notionApiKey.slice(-4)
+            : '',
+          seoreviewtoolsKeyPreview: (settings.seoreviewtoolsApiKey && settings.seoreviewtoolsApiKey.length > 0)
+            ? settings.seoreviewtoolsApiKey.slice(0, 7) + '...' + settings.seoreviewtoolsApiKey.slice(-4)
             : '',
           // Email templates status
           emailTemplatesInitialized: settings.emailTemplatesInitialized || false,
@@ -62,7 +66,16 @@ export class UserController {
         return;
       }
 
-      const { openaiApiKey, firecrawlApiKey, notionApiKey, notionDatabaseId } = req.body;
+      const { openaiApiKey, firecrawlApiKey, notionApiKey, notionDatabaseId, seoreviewtoolsApiKey } = req.body;
+
+      logger.info('Updating user settings', { 
+        userId, 
+        hasOpenaiKey: openaiApiKey !== undefined,
+        hasFirecrawlKey: firecrawlApiKey !== undefined,
+        hasNotionKey: notionApiKey !== undefined,
+        hasNotionDbId: notionDatabaseId !== undefined,
+        hasSeoreviewtoolsKey: seoreviewtoolsApiKey !== undefined,
+      });
 
       const updateData: Record<string, string> = {};
       
@@ -79,6 +92,11 @@ export class UserController {
       if (notionDatabaseId !== undefined) {
         updateData.notionDatabaseId = notionDatabaseId;
       }
+      if (seoreviewtoolsApiKey !== undefined) {
+        updateData.seoreviewtoolsApiKey = seoreviewtoolsApiKey;
+      }
+
+      logger.info('Update data prepared', { updateDataKeys: Object.keys(updateData) });
 
       const settings = await UserSettings.findOneAndUpdate(
         { clerkUserId: userId },
@@ -86,21 +104,38 @@ export class UserController {
         { new: true, upsert: true }
       );
 
+      if (!settings) {
+        res.status(500).json({ success: false, error: 'Failed to update settings' });
+        return;
+      }
+
       logger.info('User settings updated', { userId });
 
       res.json({
         success: true,
         message: 'Settings updated successfully',
         data: {
-          hasOpenaiKey: !!settings.openaiApiKey,
-          hasFirecrawlKey: !!settings.firecrawlApiKey,
-          hasNotionKey: !!settings.notionApiKey,
-          notionDatabaseId: settings.notionDatabaseId || '',
+          hasOpenaiKey: !!settings?.openaiApiKey,
+          hasFirecrawlKey: !!settings?.firecrawlApiKey,
+          hasNotionKey: !!settings?.notionApiKey,
+          hasSeoreviewtoolsKey: !!(settings?.seoreviewtoolsApiKey && settings.seoreviewtoolsApiKey.length > 0),
+          notionDatabaseId: settings?.notionDatabaseId || '',
         },
       });
     } catch (error) {
-      logger.error('Failed to update user settings', { message: (error as Error)?.message || String(error), stack: (error as Error)?.stack, error });
-      res.status(500).json({ success: false, error: 'Failed to update settings' });
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      const errorStack = error instanceof Error ? error.stack : undefined;
+      logger.error('Failed to update user settings', { 
+        message: errorMessage, 
+        stack: errorStack, 
+        error: error,
+        userId: getUserId(req),
+      });
+      res.status(500).json({ 
+        success: false, 
+        error: 'Failed to update settings',
+        message: errorMessage,
+      });
     }
   }
 
