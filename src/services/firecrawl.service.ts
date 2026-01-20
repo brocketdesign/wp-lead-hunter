@@ -3,7 +3,8 @@ import { z } from 'zod';
 import config from '../config';
 import logger from '../utils/logger';
 import { DiscoveryAgent, IDiscoveredBlog } from '../models/DiscoveryAgent';
-import { ScrapedUrl } from '../models';
+import { ScrapedUrl, UserSettings } from '../models';
+import trafficEstimatorService from './trafficEstimator.service';
 
 // Schema for the Firecrawl agent response
 const BlogResultSchema = z.array(
@@ -105,6 +106,71 @@ export class FirecrawlService {
       // Get agent to get clerkUserId
       const agent = await DiscoveryAgent.findById(agentId);
       const clerkUserId = agent?.clerkUserId;
+
+      // Get user's seoreviewtools API key if available
+      let seoreviewtoolsApiKey: string | undefined;
+      if (clerkUserId) {
+        try {
+          const userSettings = await UserSettings.findOne({ clerkUserId });
+          if (userSettings?.seoreviewtoolsApiKey) {
+            seoreviewtoolsApiKey = userSettings.seoreviewtoolsApiKey;
+            logger.info(`Found seoreviewtools API key for user ${clerkUserId}, will fetch traffic info`);
+          }
+        } catch (error) {
+          logger.warn(`Error fetching user settings for traffic info:`, { error });
+        }
+      }
+
+      // Fetch traffic information for each blog if API key is available
+      if (seoreviewtoolsApiKey && blogs.length > 0) {
+        logger.info(`Fetching traffic information for ${blogs.length} blogs using seoreviewtools API`);
+        
+        // Process blogs in parallel with rate limiting (batch of 5 at a time)
+        const batchSize = 5;
+        for (let i = 0; i < blogs.length; i += batchSize) {
+          const batch = blogs.slice(i, i + batchSize);
+          const trafficPromises = batch.map(async (blog) => {
+            try {
+              if (!blog.url) {
+                return;
+              }
+
+              const trafficInfo = await trafficEstimatorService.getTrafficInfoFromSeoreviewtools(
+                blog.url,
+                seoreviewtoolsApiKey!
+              );
+
+              if (trafficInfo) {
+                blog.traffic = trafficInfo.traffic || trafficInfo.monthlyVisits || trafficInfo.estimatedVisits;
+                blog.domainAge = trafficInfo.domainAge;
+                blog.globalRank = trafficInfo.globalRank;
+                blog.countryRank = trafficInfo.countryRank;
+                blog.monthlyVisits = trafficInfo.monthlyVisits || trafficInfo.traffic;
+
+                logger.debug(`Added traffic info for ${blog.url}:`, {
+                  traffic: blog.traffic,
+                  domainAge: blog.domainAge,
+                  globalRank: blog.globalRank,
+                });
+              }
+            } catch (error) {
+              logger.warn(`Error fetching traffic info for ${blog.url}:`, { error });
+              // Continue processing other blogs even if one fails
+            }
+          });
+
+          await Promise.allSettled(trafficPromises);
+          
+          // Small delay between batches to avoid rate limiting
+          if (i + batchSize < blogs.length) {
+            await new Promise(resolve => setTimeout(resolve, 500));
+          }
+        }
+
+        logger.info(`Completed fetching traffic information for blogs`);
+      } else if (blogs.length > 0) {
+        logger.info(`No seoreviewtools API key found, skipping traffic info fetch`);
+      }
 
       // Save all URLs to the ScrapedUrl collection
       if (blogs.length > 0 && clerkUserId) {

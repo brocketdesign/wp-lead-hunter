@@ -17,6 +17,12 @@ export interface IDiscoveredBlog {
   monthly_unique_users_approx_citation?: string;
   has_profile_page?: boolean;
   has_profile_page_citation?: string;
+  // Traffic information from seoreviewtools API
+  traffic?: number;
+  domainAge?: number;
+  globalRank?: number;
+  countryRank?: number;
+  monthlyVisits?: number;
 }
 
 export interface IDiscoveryAgent extends Document {
@@ -53,6 +59,12 @@ const discoveredBlogSchema = new Schema<IDiscoveredBlog>(
     monthly_unique_users_approx_citation: String,
     has_profile_page: Boolean,
     has_profile_page_citation: String,
+    // Traffic information
+    traffic: Number,
+    domainAge: Number,
+    globalRank: Number,
+    countryRank: Number,
+    monthlyVisits: Number,
   },
   { _id: false }
 );

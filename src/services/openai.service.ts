@@ -21,26 +21,57 @@ export class OpenAIService {
   async generatePersonalizedEmail(
     lead: Lead,
     template?: EmailTemplate,
-    language?: string
+    language?: string,
+    customInstructions?: string
   ): Promise<{ subject: string; body: string }> {
+    logger.info('Generating personalized email:', { 
+      leadUrl: lead.url, 
+      hasTemplate: !!template, 
+      language, 
+      hasCustomInstructions: !!customInstructions,
+      customInstructionsPreview: customInstructions?.substring(0, 100)
+    });
+
     if (!this.client) {
+      logger.warn('OpenAI client not configured, using fallback');
       return this.generateFallbackEmail(lead, template, language);
     }
 
     try {
-      const prompt = this.buildPrompt(lead, template, language);
+      // First, fetch website information
+      logger.info('Fetching website context for:', { url: lead.url });
+      let websiteContext = '';
+      try {
+        websiteContext = await this.fetchWebsiteContext(lead.url);
+        logger.info('Website context fetched:', { 
+          url: lead.url, 
+          contextLength: websiteContext.length,
+          hasContext: websiteContext.length > 0 
+        });
+      } catch (webError) {
+        logger.warn('Could not fetch website context:', { error: getErrorMessage(webError) });
+      }
+
+      const prompt = this.buildPrompt(lead, template, language, customInstructions, websiteContext);
       
       const languageInstruction = language && language !== 'en' 
         ? `Write the email entirely in ${this.getLanguageName(language)}. ` 
         : '';
 
+      const customInstructionText = customInstructions 
+        ? `IMPORTANT - Follow these specific instructions from the user: ${customInstructions}. ` 
+        : '';
+
+      const systemContent = `You are a professional email copywriter specializing in outreach emails for blog partnerships and collaborations. ${languageInstruction}${customInstructionText}Write personalized, engaging emails that are professional yet friendly. Use the website context provided to make the email highly relevant and personalized with specific references to their actual content.`;
+
+      logger.info('Calling OpenAI for email generation with context');
+
       const response = await this.client.chat.completions.create({
-        model: 'gpt-4',
+        model: 'gpt-4o',
         messages: [
           {
             role: 'system',
-            content:
-              `You are a professional email copywriter specializing in outreach emails for blog partnerships and collaborations. ${languageInstruction}Write personalized, engaging emails that are professional yet friendly.`,
+            content: systemContent,
           },
           {
             role: 'user',
@@ -48,15 +79,172 @@ export class OpenAIService {
           },
         ],
         temperature: 0.7,
-        max_tokens: 500,
+        max_tokens: 1000,
       });
 
       const content = response.choices[0]?.message?.content || '';
+      logger.info('Email generated successfully:', { responseLength: content.length });
+      
       return this.parseEmailContent(content);
     } catch (error) {
       logger.error('Error generating email with OpenAI:', { error: getErrorMessage(error) });
       return this.generateFallbackEmail(lead, template, language);
     }
+  }
+
+  /**
+   * Fetch website content and analyze it with OpenAI
+   */
+  private async fetchWebsiteContext(url: string): Promise<string> {
+    if (!this.client) {
+      return '';
+    }
+
+    try {
+      // First, fetch the website HTML content
+      logger.info('Fetching website content for email personalization:', { url });
+      
+      const websiteContent = await this.scrapeWebsiteContent(url);
+      
+      if (!websiteContent || websiteContent.length < 100) {
+        logger.warn('Could not fetch enough website content:', { url, contentLength: websiteContent?.length });
+        return '';
+      }
+
+      // Now analyze the content with OpenAI
+      const response = await this.client.chat.completions.create({
+        model: 'gpt-4o-mini',
+        messages: [
+          {
+            role: 'system',
+            content: `You are an expert at analyzing websites and extracting key information for personalized outreach emails.
+Analyze the provided website content and extract:
+1. What the website/blog is about (main topics, niche)
+2. The writing style and tone
+3. Target audience
+4. Recent blog posts or content themes (if visible)
+5. Notable achievements, products, or services
+6. Any personal information about the blogger/owner
+7. What makes this site unique or interesting
+
+Be specific and provide concrete details that can be used to write a highly personalized email.`,
+          },
+          {
+            role: 'user',
+            content: `Analyze this website content from ${url}:\n\n${websiteContent.substring(0, 15000)}`,
+          },
+        ],
+        temperature: 0.3,
+        max_tokens: 1000,
+      });
+
+      const analysis = response.choices[0]?.message?.content || '';
+      logger.info('Website analysis completed:', { url, analysisLength: analysis.length });
+      
+      return analysis;
+    } catch (error) {
+      logger.warn('Website analysis failed:', { url, error: getErrorMessage(error) });
+      return '';
+    }
+  }
+
+  /**
+   * Scrape website content using fetch
+   */
+  private async scrapeWebsiteContent(url: string): Promise<string> {
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 second timeout
+
+      const response = await fetch(url, {
+        signal: controller.signal,
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+          'Accept-Language': 'en-US,en;q=0.5',
+        },
+      });
+
+      clearTimeout(timeoutId);
+
+      if (!response.ok) {
+        logger.warn('Website fetch failed:', { url, status: response.status });
+        return '';
+      }
+
+      const html = await response.text();
+      
+      // Extract text content from HTML (simple extraction)
+      const textContent = this.extractTextFromHtml(html);
+      
+      return textContent;
+    } catch (error) {
+      logger.warn('Failed to scrape website:', { url, error: getErrorMessage(error) });
+      return '';
+    }
+  }
+
+  /**
+   * Extract readable text from HTML
+   */
+  private extractTextFromHtml(html: string): string {
+    // Remove script and style tags
+    let text = html.replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '');
+    text = text.replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '');
+    text = text.replace(/<noscript[^>]*>[\s\S]*?<\/noscript>/gi, '');
+    
+    // Remove HTML comments
+    text = text.replace(/<!--[\s\S]*?-->/g, '');
+    
+    // Extract title
+    const titleMatch = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
+    const title = titleMatch ? titleMatch[1].trim() : '';
+    
+    // Extract meta description
+    const metaDescMatch = html.match(/<meta[^>]*name=["']description["'][^>]*content=["']([^"']*)["']/i);
+    const metaDesc = metaDescMatch ? metaDescMatch[1].trim() : '';
+    
+    // Extract headings
+    const headings: string[] = [];
+    const headingMatches = text.matchAll(/<h[1-6][^>]*>([\s\S]*?)<\/h[1-6]>/gi);
+    for (const match of headingMatches) {
+      const heading = match[1].replace(/<[^>]+>/g, '').trim();
+      if (heading) headings.push(heading);
+    }
+    
+    // Extract paragraph text
+    const paragraphs: string[] = [];
+    const pMatches = text.matchAll(/<p[^>]*>([\s\S]*?)<\/p>/gi);
+    for (const match of pMatches) {
+      const para = match[1].replace(/<[^>]+>/g, '').trim();
+      if (para && para.length > 20) paragraphs.push(para);
+    }
+    
+    // Extract article content
+    const articleMatch = text.match(/<article[^>]*>([\s\S]*?)<\/article>/i);
+    let articleText = '';
+    if (articleMatch) {
+      articleText = articleMatch[1].replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+    }
+    
+    // Extract main content
+    const mainMatch = text.match(/<main[^>]*>([\s\S]*?)<\/main>/i);
+    let mainText = '';
+    if (mainMatch) {
+      mainText = mainMatch[1].replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+    }
+    
+    // Build the final content
+    const parts: string[] = [];
+    
+    if (title) parts.push(`TITLE: ${title}`);
+    if (metaDesc) parts.push(`DESCRIPTION: ${metaDesc}`);
+    if (headings.length > 0) parts.push(`HEADINGS:\n${headings.slice(0, 20).join('\n')}`);
+    if (articleText) parts.push(`ARTICLE CONTENT:\n${articleText.substring(0, 5000)}`);
+    else if (mainText) parts.push(`MAIN CONTENT:\n${mainText.substring(0, 5000)}`);
+    if (paragraphs.length > 0) parts.push(`PARAGRAPHS:\n${paragraphs.slice(0, 15).join('\n\n')}`);
+    
+    return parts.join('\n\n');
   }
 
   private getLanguageName(code: string): string {
@@ -75,10 +263,19 @@ export class OpenAIService {
     return languages[code] || 'English';
   }
 
-  private buildPrompt(lead: Lead, template?: EmailTemplate, language?: string): string {
+  private buildPrompt(lead: Lead, template?: EmailTemplate, language?: string, customInstructions?: string, websiteContext?: string): string {
     const languageNote = language && language !== 'en' 
       ? `\n\nIMPORTANT: Write the entire email in ${this.getLanguageName(language)}. The subject and body must be in ${this.getLanguageName(language)}.`
       : '';
+    
+    const customInstructionsNote = customInstructions 
+      ? `\n\nCUSTOM INSTRUCTIONS FROM USER:\n${customInstructions}`
+      : '';
+
+    const websiteContextNote = websiteContext 
+      ? `\n\nDETAILED WEBSITE ANALYSIS (use this to personalize the email):\n${websiteContext}`
+      : '';
+
     // Build available data object for variable replacement
     const availableData = {
       name: lead.contactName || 'there',
@@ -129,14 +326,17 @@ BLOG INFORMATION:
 - Description: ${availableData.description || 'A WordPress blog'}
 - Contact Name: ${availableData.name}
 - Niche/Topic: ${availableData.niche}
+${websiteContextNote}
 
 INSTRUCTIONS:
 1. Replace any remaining {{variable}} placeholders with relevant, personalized content
-2. For {{recent_topic}}, invent a plausible recent blog topic based on their niche
-3. For {{specific_compliment}}, create a genuine compliment about their blog
-4. Keep the tone professional but friendly
-5. Make sure the email sounds natural and personalized, not templated
-6. Keep {{sender_name}}, {{sender_title}}, {{company_name}} as-is if they appear (user will fill these)
+2. Use the detailed website analysis above to make specific, accurate references to their content
+3. For {{recent_topic}}, use actual content from the website analysis if available
+4. For {{specific_compliment}}, create a genuine compliment based on real details from their site
+5. Keep the tone professional but friendly
+6. Make sure the email sounds natural and personalized, not templated
+7. Keep {{sender_name}}, {{sender_title}}, {{company_name}} as-is if they appear (user will fill these)
+${customInstructionsNote}
 
 Return in this exact format:
 SUBJECT: [the complete subject line]
@@ -153,13 +353,15 @@ Target Blog Information:
 - Description: ${availableData.description || 'A WordPress blog'}
 - Contact Name: ${availableData.name}
 - Niche/Topic: ${availableData.niche}
+${websiteContextNote}
 
 Create a personalized email that:
 1. Addresses them by name if available
-2. Mentions something specific about their blog
+2. Uses specific details from the website analysis to mention something real about their blog
 3. Explains the value of potential collaboration
 4. Has a clear, soft call-to-action
 5. Sounds genuine and not like a mass email
+${customInstructionsNote}
 
 Return in this exact format:
 SUBJECT: [subject line]

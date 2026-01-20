@@ -107,10 +107,10 @@ export default function Dashboard() {
           <div className="space-y-3">
             <a
               href="/dashboard/discover"
-              className="flex items-center gap-4 p-4 bg-primary-50 rounded-lg hover:bg-primary-100 transition-colors"
+              className="flex items-center gap-4 p-4 bg-blue-50 rounded-lg hover:bg-blue-100 transition-colors"
             >
-              <div className="w-10 h-10 bg-primary-600 rounded-lg flex items-center justify-center">
-                <Search className="w-5 h-5 text-white" />
+              <div className="w-10 h-10 bg-blue-600 rounded-lg flex items-center justify-center flex-shrink-0">
+                <Search className="w-5 h-5 text-white" strokeWidth={2.5} />
               </div>
               <div>
                 <p className="font-medium text-gray-900">Discover New Leads</p>

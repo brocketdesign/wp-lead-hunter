@@ -49,6 +49,7 @@ function EmailsContent() {
   const [selectedLeadId, setSelectedLeadId] = useState('');
   const [selectedTemplateId, setSelectedTemplateId] = useState('');
   const [emailLanguage, setEmailLanguage] = useState('en');
+  const [customInstructions, setCustomInstructions] = useState('');
   const [generatedEmail, setGeneratedEmail] = useState({ subject: '', body: '' });
 
   // Fetch templates
@@ -90,7 +91,7 @@ function EmailsContent() {
 
   // Generate email mutation
   const generateMutation = useMutation({
-    mutationFn: (data: { leadId: string; templateId?: string; language?: string }) =>
+    mutationFn: (data: { leadId: string; templateId?: string; language?: string; customInstructions?: string }) =>
       api.post<{ subject: string; body: string }>('/emails/generate', data),
     onSuccess: (response) => {
       if (response.data) {
@@ -168,6 +169,7 @@ function EmailsContent() {
     setSelectedLeadId('');
     setSelectedTemplateId('');
     setEmailLanguage('en');
+    setCustomInstructions('');
     setGeneratedEmail({ subject: '', body: '' });
   };
 
@@ -177,6 +179,7 @@ function EmailsContent() {
         leadId: selectedLeadId,
         templateId: selectedTemplateId || undefined,
         language: emailLanguage,
+        customInstructions: customInstructions || undefined,
       });
     }
   };
@@ -460,6 +463,24 @@ function EmailsContent() {
                     </option>
                   ))}
                 </select>
+              </div>
+
+              {/* Custom Instructions */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  <FileText className="w-4 h-4 inline mr-1" />
+                  Custom Instructions (Optional)
+                </label>
+                <textarea
+                  value={customInstructions}
+                  onChange={(e) => setCustomInstructions(e.target.value)}
+                  placeholder="e.g., Mention that we offer a 20% discount for bloggers, focus on our WordPress plugin features, use a casual friendly tone..."
+                  rows={3}
+                  className="input resize-none"
+                />
+                <p className="text-xs text-gray-500 mt-1">
+                  Add specific instructions to customize the generated email. The AI will incorporate these into the message.
+                </p>
               </div>
 
               <button

@@ -100,13 +100,14 @@ export class EmailService {
     language?: string;
     fromEmail?: string;
     fromName?: string;
+    customInstructions?: string;
   }): Promise<EmailRecord> {
     logger.info(`Preparing email for lead ${lead.id}`);
 
     const template = templateId ? this.templates.get(templateId) : undefined;
 
-    // Generate personalized email with language support
-    const { subject, body } = await openaiService.generatePersonalizedEmail(lead, template, options?.language);
+    // Generate personalized email with language support and custom instructions
+    const { subject, body } = await openaiService.generatePersonalizedEmail(lead, template, options?.language, options?.customInstructions);
 
     // Create email record
     const emailRecord: EmailRecord = {
@@ -200,6 +201,7 @@ export class EmailService {
       fromEmail?: string;
       fromName?: string;
       delayMs?: number;
+      customInstructions?: string;
     }
   ): Promise<{
     sent: number;

@@ -3,6 +3,9 @@ import agentController from '../controllers/agent.controller';
 
 const router = Router();
 
+// AI-assisted agent creation from simple objective
+router.post('/generate-from-objective', agentController.generateFromObjective.bind(agentController));
+
 // Generate a Firecrawl prompt using OpenAI
 router.post('/generate-prompt', agentController.generatePrompt.bind(agentController));
 

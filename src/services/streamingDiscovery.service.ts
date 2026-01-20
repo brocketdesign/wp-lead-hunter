@@ -1,6 +1,7 @@
 import { v4 as uuidv4 } from 'uuid';
 import { Response } from 'express';
 import { DiscoverySession } from '../models';
+import ExcludedUrl from '../models/ExcludedUrl';
 import logger from '../utils/logger';
 import wordpressDetector from './wordpressDetector.service';
 import trafficEstimator from './trafficEstimator.service';
@@ -172,6 +173,7 @@ export class StreamingDiscoveryService {
 
     const discoverySessionId = uuidv4();
     let filteredOutCount = 0;
+    let excludedUrlsCount = 0;
     const searchedKeywords: string[] = [];
     const allDiscoveredLeads: DiscoveredLead[] = [];
     const processedUrls = new Set<string>();
@@ -196,11 +198,26 @@ export class StreamingDiscoveryService {
         return;
       }
 
+      // Fetch user's excluded domains
+      const excludedDomains = new Set<string>();
+      if (userId) {
+        try {
+          const excludedUrls = await ExcludedUrl.find({ clerkUserId: userId }).select('domain');
+          excludedUrls.forEach(item => excludedDomains.add(item.domain));
+          if (excludedDomains.size > 0) {
+            this.sendLog(res, 'info', `Loaded ${excludedDomains.size} excluded domains from your list`);
+          }
+        } catch (error) {
+          logger.warn('Failed to load excluded URLs', { error });
+        }
+      }
+
       this.sendLog(res, 'info', `Starting discovery session ${discoverySessionId}`, {
         keywords,
         maxResults,
         filterCorporate,
         language,
+        excludedDomainsCount: excludedDomains.size,
       });
 
       // Update both OpenAI and Search services with user's API key if provided
@@ -274,13 +291,24 @@ export class StreamingDiscoveryService {
 
           this.sendLog(res, 'success', `Found ${searchResults.length} search results for "${keyword}"`);
 
-          // Filter unique results
+          // Filter unique results and excluded domains
           const uniqueResults = searchResults.filter(r => {
             if (processedUrls.has(r.url)) return false;
+            
+            // Check if domain is in exclusion list
+            const domain = r.domain || this.extractDomain(r.url);
+            if (excludedDomains.has(domain)) {
+              excludedUrlsCount++;
+              return false;
+            }
+            
             processedUrls.add(r.url);
             return true;
           });
 
+          if (excludedUrlsCount > 0) {
+            this.sendLog(res, 'info', `Filtered ${excludedUrlsCount} excluded domains from results`);
+          }
           this.sendLog(res, 'info', `${uniqueResults.length} unique sites to analyze`);
 
           // Process in batches for efficiency

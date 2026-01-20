@@ -3,6 +3,7 @@ import leadRoutes from './lead.routes';
 import emailRoutes from './email.routes';
 import userRoutes from './user.routes';
 import agentRoutes from './agent.routes';
+import excludedUrlRoutes from './excludedUrl.routes';
 
 const router = Router();
 
@@ -10,6 +11,7 @@ router.use('/leads', leadRoutes);
 router.use('/emails', emailRoutes);
 router.use('/user', userRoutes);
 router.use('/agents', agentRoutes);
+router.use('/excluded-urls', excludedUrlRoutes);
 
 // Health check
 router.get('/health', (_req, res) => {

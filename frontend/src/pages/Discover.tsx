@@ -79,6 +79,17 @@ interface GeneratedConfig {
   description: string;
 }
 
+interface AIObjectiveResponse {
+  analysis: string;
+  suggestedKeywords: string[];
+  niche: string;
+  language: string;
+  targetAudience: string;
+  additionalRequirements: string;
+  agentName: string;
+  agentDescription: string;
+}
+
 function DiscoverContent() {
   const api = useApi();
   const queryClient = useQueryClient();
@@ -95,6 +106,11 @@ function DiscoverContent() {
   const [avoidScrapingSameUrl, setAvoidScrapingSameUrl] = useState(false);
   const [savedResultIndices, setSavedResultIndices] = useState<Record<string, Set<number>>>({});
 
+  // AI-Assisted Creation state
+  const [aiObjective, setAiObjective] = useState('');
+  const [aiSuggestions, setAiSuggestions] = useState<AIObjectiveResponse | null>(null);
+  const [selectedKeywords, setSelectedKeywords] = useState<Set<string>>(new Set());
+
   // Fetch user settings to check for keys
   const {
     data: settingsData,
@@ -110,6 +126,35 @@ function DiscoverContent() {
     queryKey: ['agents'],
     queryFn: () => api.get<any[]>('/agents'),
     refetchInterval: 5000,
+  });
+
+  // AI-assisted: Generate suggestions from objective
+  const generateFromObjectiveMutation = useMutation({
+    mutationFn: (payload: { objective: string }) =>
+      api.post<AIObjectiveResponse>('/agents/generate-from-objective', payload),
+    onSuccess: (res) => {
+      const suggestions = res.data;
+      setAiSuggestions(suggestions);
+      // Auto-select all suggested keywords
+      setSelectedKeywords(new Set(suggestions.suggestedKeywords || []));
+      // Pre-fill the form with suggestions
+      setNiche(suggestions.niche || '');
+      setLanguage(suggestions.language || 'en');
+      setTargetAudience(suggestions.targetAudience || 'Personal bloggers and small teams');
+      setAdditionalRequirements(suggestions.additionalRequirements || '');
+      addToast({
+        type: 'success',
+        title: 'AI Analysis Complete',
+        message: 'Review the suggestions below and create your agent when ready.',
+      });
+    },
+    onError: (error: any) => {
+      addToast({
+        type: 'error',
+        title: 'Analysis Failed',
+        message: error?.response?.data?.error || 'Failed to analyze your objective.',
+      });
+    },
   });
 
   // Generate prompt, name, and description using OpenAI
@@ -325,6 +370,36 @@ function DiscoverContent() {
     }
   };
 
+  // Toggle keyword selection
+  const toggleKeyword = (keyword: string) => {
+    const newSelected = new Set(selectedKeywords);
+    if (newSelected.has(keyword)) {
+      newSelected.delete(keyword);
+    } else {
+      newSelected.add(keyword);
+    }
+    setSelectedKeywords(newSelected);
+    // Update niche with selected keywords
+    setNiche(Array.from(newSelected).join(', '));
+  };
+
+  // Apply AI suggestions to the form
+  const applyAiSuggestions = () => {
+    if (aiSuggestions) {
+      setNiche(Array.from(selectedKeywords).join(', ') || aiSuggestions.niche);
+      setLanguage(aiSuggestions.language || 'en');
+      setTargetAudience(aiSuggestions.targetAudience || 'Personal bloggers and small teams');
+      setAdditionalRequirements(aiSuggestions.additionalRequirements || '');
+    }
+  };
+
+  // Clear AI suggestions
+  const clearAiSuggestions = () => {
+    setAiSuggestions(null);
+    setAiObjective('');
+    setSelectedKeywords(new Set());
+  };
+
   // Check API key availability
   const hasOpenAIApiKey = settingsData?.data?.hasOpenaiKey || false;
   const hasFirecrawlApiKey = settingsData?.data?.hasFirecrawlKey || false;
@@ -345,6 +420,141 @@ function DiscoverContent() {
               <p className="text-gray-600 mt-1">
                 Create intelligent agents to find WordPress blogs in your target niche
               </p>
+            </div>
+          </div>
+        </div>
+
+        {/* AI-Assisted Agent Creation */}
+        <div className="mb-8">
+          <div className="bg-gradient-to-r from-purple-50 to-blue-50 rounded-xl shadow-sm border border-purple-200 p-6">
+            <div className="flex items-center gap-3 mb-4">
+              <div className="w-10 h-10 bg-gradient-to-r from-purple-600 to-blue-600 rounded-lg flex items-center justify-center">
+                <Sparkles className="w-6 h-6 text-white" />
+              </div>
+              <div>
+                <h2 className="text-xl font-semibold text-gray-900">AI-Assisted Agent Creation</h2>
+                <p className="text-sm text-gray-600">Describe what you're looking for and let AI configure the agent for you</p>
+              </div>
+            </div>
+
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  What are you looking for?
+                </label>
+                <textarea
+                  value={aiObjective}
+                  onChange={(e) => setAiObjective(e.target.value)}
+                  placeholder="e.g., I want to find Japanese anime bloggers who write reviews about new anime series. They should have a contact email and be open to collaborations. I'm looking for personal bloggers, not corporate sites."
+                  rows={3}
+                  className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-purple-500 transition-colors resize-none"
+                  disabled={!hasOpenAIApiKey}
+                />
+              </div>
+
+              <button
+                onClick={() => generateFromObjectiveMutation.mutate({ objective: aiObjective })}
+                disabled={generateFromObjectiveMutation.isPending || !aiObjective.trim() || !hasOpenAIApiKey}
+                className={cn(
+                  'w-full flex items-center justify-center gap-3 px-6 py-3 rounded-lg font-medium transition-all duration-200',
+                  generateFromObjectiveMutation.isPending || !aiObjective.trim() || !hasOpenAIApiKey
+                    ? 'bg-gray-100 text-gray-400 cursor-not-allowed'
+                    : 'bg-gradient-to-r from-purple-600 to-blue-600 text-white hover:from-purple-700 hover:to-blue-700 shadow-lg hover:shadow-xl transform hover:-translate-y-0.5'
+                )}
+              >
+                {generateFromObjectiveMutation.isPending ? (
+                  <>
+                    <Loader2 className="w-5 h-5 animate-spin" />
+                    Analyzing your objective...
+                  </>
+                ) : !hasOpenAIApiKey ? (
+                  <>
+                    <AlertCircle className="w-5 h-5" />
+                    OpenAI API Key Required
+                  </>
+                ) : (
+                  <>
+                    <Sparkles className="w-5 h-5" />
+                    Let AI Configure My Agent
+                  </>
+                )}
+              </button>
+
+              {/* AI Suggestions */}
+              {aiSuggestions && (
+                <div className="mt-6 p-4 bg-white rounded-lg border border-purple-200 space-y-4">
+                  <div className="flex items-center justify-between">
+                    <h3 className="font-semibold text-gray-900 flex items-center gap-2">
+                      <Bot className="w-5 h-5 text-purple-600" />
+                      AI Suggestions
+                    </h3>
+                    <button
+                      onClick={clearAiSuggestions}
+                      className="text-sm text-gray-500 hover:text-gray-700"
+                    >
+                      Clear
+                    </button>
+                  </div>
+
+                  {aiSuggestions.analysis && (
+                    <div className="p-3 bg-purple-50 rounded-lg">
+                      <p className="text-sm text-gray-700">{aiSuggestions.analysis}</p>
+                    </div>
+                  )}
+
+                  {/* Keywords Selection */}
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                      Suggested Keywords (click to toggle)
+                    </label>
+                    <div className="flex flex-wrap gap-2">
+                      {aiSuggestions.suggestedKeywords.map((keyword) => (
+                        <button
+                          key={keyword}
+                          onClick={() => toggleKeyword(keyword)}
+                          className={cn(
+                            'px-3 py-1.5 rounded-full text-sm font-medium transition-all',
+                            selectedKeywords.has(keyword)
+                              ? 'bg-purple-600 text-white'
+                              : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                          )}
+                        >
+                          {selectedKeywords.has(keyword) ? (
+                            <Check className="w-3 h-3 inline mr-1" />
+                          ) : null}
+                          {keyword}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Suggested Agent Info */}
+                  <div className="grid grid-cols-2 gap-4 text-sm">
+                    <div>
+                      <span className="font-medium text-gray-700">Agent Name:</span>
+                      <p className="text-gray-900">{aiSuggestions.agentName}</p>
+                    </div>
+                    <div>
+                      <span className="font-medium text-gray-700">Language:</span>
+                      <p className="text-gray-900">{aiSuggestions.language === 'ja' ? 'Japanese' : aiSuggestions.language === 'en' ? 'English' : aiSuggestions.language}</p>
+                    </div>
+                    <div className="col-span-2">
+                      <span className="font-medium text-gray-700">Target Audience:</span>
+                      <p className="text-gray-900">{aiSuggestions.targetAudience}</p>
+                    </div>
+                    {aiSuggestions.additionalRequirements && (
+                      <div className="col-span-2">
+                        <span className="font-medium text-gray-700">Additional Requirements:</span>
+                        <p className="text-gray-900">{aiSuggestions.additionalRequirements}</p>
+                      </div>
+                    )}
+                  </div>
+
+                  <p className="text-xs text-gray-500">
+                    The form below has been pre-filled with these suggestions. Review and modify as needed, then generate your agent.
+                  </p>
+                </div>
+              )}
             </div>
           </div>
         </div>

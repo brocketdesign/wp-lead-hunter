@@ -25,6 +25,9 @@ import {
   Square,
   Globe,
   Languages,
+  ShieldBan,
+  Plus,
+  Link as LinkIcon,
 } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { ToastProvider, useToast } from '../components/Toast';
@@ -57,6 +60,16 @@ interface Lead {
   updatedAt: string;
 }
 
+interface ExcludedUrl {
+  _id: string;
+  url: string;
+  domain: string;
+  reason?: string;
+  addedAt: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 const statusOptions = ['all', 'DISCOVERED', 'QUALIFIED', 'CONTACTED', 'RESPONDED', 'CONVERTED', 'REJECTED'] as const;
 const blogTypeOptions = ['all', 'personal', 'indie', 'corporate', 'unknown'] as const;
 
@@ -77,6 +90,7 @@ function LeadsContent() {
   const api = useApi();
   const queryClient = useQueryClient();
   const { addToast } = useToast();
+  const [activeTab, setActiveTab] = useState<'leads' | 'exclusions'>('leads');
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('all');
   const [blogTypeFilter, setBlogTypeFilter] = useState<string>('all');
@@ -331,16 +345,354 @@ function LeadsContent() {
 
   const score = (lead: Lead) => lead.qualificationScore || lead.score || 0;
 
+  // Exclusions tab component
+  const ExclusionsTab = () => {
+    const [newUrl, setNewUrl] = useState('');
+    const [newReason, setNewReason] = useState('');
+    const [bulkUrls, setBulkUrls] = useState('');
+
+    // Fetch excluded URLs
+    const { data: excludedUrlsData, isLoading: isLoadingExcluded } = useQuery({
+      queryKey: ['excluded-urls'],
+      queryFn: () => api.get<ExcludedUrl[]>('/excluded-urls'),
+    });
+
+    const excludedUrls = excludedUrlsData?.data || [];
+
+    // Add single URL mutation
+    const addExcludedUrlMutation = useMutation({
+      mutationFn: (data: { url: string; reason?: string }) =>
+        api.post('/excluded-urls', data),
+      onSuccess: () => {
+        queryClient.invalidateQueries({ queryKey: ['excluded-urls'] });
+        setNewUrl('');
+        setNewReason('');
+        addToast({
+          type: 'success',
+          title: 'URL Added',
+          message: 'The URL has been added to your exclusion list.',
+        });
+      },
+      onError: (error: any) => {
+        addToast({
+          type: 'error',
+          title: 'Error',
+          message: error?.message || 'Failed to add URL',
+        });
+      },
+    });
+
+    // Add bulk URLs mutation
+    const addBulkExcludedUrlsMutation = useMutation({
+      mutationFn: (urls: string[]) =>
+        api.post('/excluded-urls/bulk', { urls }),
+      onSuccess: (response: any) => {
+        queryClient.invalidateQueries({ queryKey: ['excluded-urls'] });
+        setBulkUrls('');
+        const data = response.data?.data;
+        addToast({
+          type: 'success',
+          title: 'URLs Added',
+          message: `${data.added.length} URLs added, ${data.skipped.length} duplicates skipped, ${data.errors.length} errors.`,
+        });
+      },
+      onError: (error: any) => {
+        addToast({
+          type: 'error',
+          title: 'Error',
+          message: error?.message || 'Failed to add URLs',
+        });
+      },
+    });
+
+    // Delete URL mutation
+    const deleteExcludedUrlMutation = useMutation({
+      mutationFn: (id: string) => api.delete(`/excluded-urls/${id}`),
+      onSuccess: () => {
+        queryClient.invalidateQueries({ queryKey: ['excluded-urls'] });
+        addToast({
+          type: 'success',
+          title: 'URL Removed',
+          message: 'The URL has been removed from your exclusion list.',
+        });
+      },
+    });
+
+    // Clear all mutation
+    const clearAllMutation = useMutation({
+      mutationFn: () => api.delete('/excluded-urls'),
+      onSuccess: () => {
+        queryClient.invalidateQueries({ queryKey: ['excluded-urls'] });
+        addToast({
+          type: 'success',
+          title: 'List Cleared',
+          message: 'All excluded URLs have been removed.',
+        });
+      },
+    });
+
+    const handleAddUrl = (e: React.FormEvent) => {
+      e.preventDefault();
+      if (newUrl.trim()) {
+        addExcludedUrlMutation.mutate({ url: newUrl.trim(), reason: newReason.trim() });
+      }
+    };
+
+    const handleAddBulkUrls = (e: React.FormEvent) => {
+      e.preventDefault();
+      const urls = bulkUrls
+        .split('\n')
+        .map(url => url.trim())
+        .filter(url => url.length > 0);
+      
+      if (urls.length > 0) {
+        addBulkExcludedUrlsMutation.mutate(urls);
+      }
+    };
+
+    const handleClearAll = () => {
+      if (confirm(`Are you sure you want to remove all ${excludedUrls.length} excluded URLs?`)) {
+        clearAllMutation.mutate();
+      }
+    };
+
+    return (
+      <div className="space-y-6">
+        {/* Add Single URL Form */}
+        <div className="card">
+          <h3 className="text-lg font-semibold text-gray-900 mb-4 flex items-center gap-2">
+            <Plus className="w-5 h-5" />
+            Add Single URL
+          </h3>
+          <form onSubmit={handleAddUrl} className="space-y-4">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                URL to Exclude
+              </label>
+              <input
+                type="url"
+                value={newUrl}
+                onChange={(e) => setNewUrl(e.target.value)}
+                placeholder="https://example.com"
+                className="input"
+                required
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                Reason (Optional)
+              </label>
+              <input
+                type="text"
+                value={newReason}
+                onChange={(e) => setNewReason(e.target.value)}
+                placeholder="Why are you excluding this URL?"
+                className="input"
+              />
+            </div>
+            <button
+              type="submit"
+              disabled={addExcludedUrlMutation.isPending || !newUrl.trim()}
+              className="btn btn-primary"
+            >
+              {addExcludedUrlMutation.isPending ? (
+                <>
+                  <Loader2 className="w-4 h-4 animate-spin mr-2" />
+                  Adding...
+                </>
+              ) : (
+                <>
+                  <Plus className="w-4 h-4 mr-2" />
+                  Add URL
+                </>
+              )}
+            </button>
+          </form>
+        </div>
+
+        {/* Add Bulk URLs Form */}
+        <div className="card">
+          <h3 className="text-lg font-semibold text-gray-900 mb-4 flex items-center gap-2">
+            <LinkIcon className="w-5 h-5" />
+            Add Multiple URLs
+          </h3>
+          <form onSubmit={handleAddBulkUrls} className="space-y-4">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                URLs (one per line)
+              </label>
+              <textarea
+                value={bulkUrls}
+                onChange={(e) => setBulkUrls(e.target.value)}
+                placeholder="https://example1.com&#10;https://example2.com&#10;https://example3.com"
+                rows={6}
+                className="input resize-none font-mono text-sm"
+              />
+            </div>
+            <button
+              type="submit"
+              disabled={addBulkExcludedUrlsMutation.isPending || !bulkUrls.trim()}
+              className="btn btn-primary"
+            >
+              {addBulkExcludedUrlsMutation.isPending ? (
+                <>
+                  <Loader2 className="w-4 h-4 animate-spin mr-2" />
+                  Adding...
+                </>
+              ) : (
+                <>
+                  <Plus className="w-4 h-4 mr-2" />
+                  Add URLs
+                </>
+              )}
+            </button>
+          </form>
+        </div>
+
+        {/* Excluded URLs List */}
+        <div className="card">
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="text-lg font-semibold text-gray-900 flex items-center gap-2">
+              <ShieldBan className="w-5 h-5" />
+              Excluded URLs ({excludedUrls.length})
+            </h3>
+            {excludedUrls.length > 0 && (
+              <button
+                onClick={handleClearAll}
+                disabled={clearAllMutation.isPending}
+                className="btn btn-secondary text-sm flex items-center gap-2"
+              >
+                {clearAllMutation.isPending ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    Clearing...
+                  </>
+                ) : (
+                  <>
+                    <Trash2 className="w-4 h-4" />
+                    Clear All
+                  </>
+                )}
+              </button>
+            )}
+          </div>
+
+          {isLoadingExcluded ? (
+            <div className="flex items-center justify-center h-32">
+              <Loader2 className="w-8 h-8 animate-spin text-primary-600" />
+            </div>
+          ) : excludedUrls.length === 0 ? (
+            <div className="flex flex-col items-center justify-center h-32 text-gray-500">
+              <ShieldBan className="w-12 h-12 mb-4 text-gray-300" />
+              <p className="text-lg font-medium">No excluded URLs</p>
+              <p className="text-sm">Add URLs that you don't want to see in your discovery results</p>
+            </div>
+          ) : (
+            <div className="divide-y divide-gray-200">
+              {excludedUrls.map((excludedUrl) => (
+                <div key={excludedUrl._id} className="p-4 hover:bg-gray-50">
+                  <div className="flex items-start justify-between gap-4">
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 mb-1">
+                        <Globe className="w-4 h-4 text-gray-400 flex-shrink-0" />
+                        <a
+                          href={excludedUrl.url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="font-medium text-gray-900 hover:text-primary-600 truncate flex items-center gap-1"
+                        >
+                          {excludedUrl.domain}
+                          <ExternalLink className="w-3 h-3 flex-shrink-0" />
+                        </a>
+                      </div>
+                      <p className="text-sm text-gray-500 truncate">{excludedUrl.url}</p>
+                      {excludedUrl.reason && (
+                        <p className="text-sm text-gray-600 mt-1 italic">{excludedUrl.reason}</p>
+                      )}
+                      <p className="text-xs text-gray-400 mt-1">
+                        Added {new Date(excludedUrl.addedAt).toLocaleDateString()}
+                      </p>
+                    </div>
+                    <button
+                      onClick={() => {
+                        if (confirm('Remove this URL from the exclusion list?')) {
+                          deleteExcludedUrlMutation.mutate(excludedUrl._id);
+                        }
+                      }}
+                      className="p-2 text-gray-400 hover:text-red-600 rounded-lg hover:bg-gray-100"
+                      title="Remove from exclusion list"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* Info Box */}
+        <div className="card bg-blue-50 border-blue-200">
+          <div className="flex gap-3">
+            <ShieldBan className="w-5 h-5 text-blue-600 flex-shrink-0 mt-0.5" />
+            <div>
+              <h4 className="font-semibold text-blue-900 mb-1">How Exclusions Work</h4>
+              <p className="text-sm text-blue-800">
+                URLs you add here will be automatically filtered out from your discovery results.
+                When you discover new leads, any domains matching your exclusion list will not appear in the results.
+              </p>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
   return (
     <div className="space-y-6">
-      {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-bold text-gray-900">My Leads</h1>
-          <p className="text-gray-600 mt-1">
-            Manage and track your saved WordPress blogger leads.
-          </p>
+      {/* Header with Tabs */}
+      <div>
+        <h1 className="text-2xl font-bold text-gray-900">My Leads</h1>
+        <p className="text-gray-600 mt-1">
+          Manage and track your saved WordPress blogger leads.
+        </p>
+        
+        {/* Tabs */}
+        <div className="flex gap-2 mt-4 border-b border-gray-200">
+          <button
+            onClick={() => setActiveTab('leads')}
+            className={cn(
+              'px-4 py-2 font-medium text-sm border-b-2 transition-colors',
+              activeTab === 'leads'
+                ? 'border-primary-600 text-primary-600'
+                : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+            )}
+          >
+            <Users className="w-4 h-4 inline mr-2" />
+            Leads
+          </button>
+          <button
+            onClick={() => setActiveTab('exclusions')}
+            className={cn(
+              'px-4 py-2 font-medium text-sm border-b-2 transition-colors',
+              activeTab === 'exclusions'
+                ? 'border-primary-600 text-primary-600'
+                : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+            )}
+          >
+            <ShieldBan className="w-4 h-4 inline mr-2" />
+            Exclusions
+          </button>
         </div>
+      </div>
+
+      {/* Tab Content */}
+      {activeTab === 'exclusions' ? (
+        <ExclusionsTab />
+      ) : (
+        <>
+      {/* Leads Tab Content - Header */}
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div className="flex gap-2">
           {selectedLeadIds.size > 0 && (
             <button
@@ -910,6 +1262,8 @@ function LeadsContent() {
             </div>
           </div>
         </div>
+      )}
+        </>
       )}
     </div>
   );

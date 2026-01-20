@@ -9,6 +9,110 @@ import { getUserId } from '../middleware/auth';
 
 export class AgentController {
   /**
+   * Generate complete agent configuration from a simple user objective/description
+   * This is the AI-assisted agent creation feature
+   */
+  async generateFromObjective(req: Request, res: Response): Promise<void> {
+    try {
+      const { objective } = req.body;
+
+      if (!objective) {
+        res.status(400).json({
+          success: false,
+          error: 'Objective description is required',
+        });
+        return;
+      }
+
+      // Get user's OpenAI API key
+      const userId = getUserId(req);
+      let openaiApiKey = config.openai.apiKey;
+
+      if (userId) {
+        const settings = await UserSettings.findOne({ clerkUserId: userId });
+        if (settings?.openaiApiKey) {
+          openaiApiKey = settings.openaiApiKey;
+        }
+      }
+
+      if (!openaiApiKey) {
+        res.status(400).json({
+          success: false,
+          error: 'OpenAI API key not configured',
+        });
+        return;
+      }
+
+      const client = new OpenAI({ apiKey: openaiApiKey });
+
+      const systemPrompt = `You are an expert at understanding user needs and creating WordPress blog discovery agent configurations.
+Given a simple objective or description of what the user is looking for, you need to:
+1. Understand their goal and target audience
+2. Suggest relevant search keywords (5-10 keywords)
+3. Determine the best language for the search
+4. Identify the target audience type
+5. Generate additional requirements/filters
+6. Create an agent name and description
+
+Return a JSON object with:
+{
+  "analysis": "Brief analysis of the user's objective",
+  "suggestedKeywords": ["keyword1", "keyword2", ...],
+  "niche": "The main niche/topic",
+  "language": "en" | "ja" | "es" | "fr" | "de" | "other",
+  "targetAudience": "Personal bloggers and small teams" | "Individual creators" | "Small businesses" | "Professional bloggers",
+  "additionalRequirements": "Suggested additional requirements and filters",
+  "agentName": "Suggested agent name (max 50 chars)",
+  "agentDescription": "Suggested agent description (max 100 chars)"
+}`;
+
+      const response = await client.chat.completions.create({
+        model: 'gpt-4o-mini',
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { 
+            role: 'user', 
+            content: `Analyze this objective and generate a complete agent configuration:\n\n"${objective}"\n\nReturn ONLY valid JSON.` 
+          },
+        ],
+        temperature: 0.7,
+        max_tokens: 800,
+        response_format: { type: "json_object" },
+      });
+
+      const content = response.choices[0]?.message?.content?.trim() || '{}';
+      let parsedResponse;
+      try {
+        parsedResponse = JSON.parse(content);
+      } catch (parseError) {
+        logger.error('Failed to parse OpenAI response as JSON:', { content, parseError });
+        throw new Error('Invalid response format from OpenAI');
+      }
+
+      res.json({
+        success: true,
+        data: {
+          analysis: parsedResponse.analysis || '',
+          suggestedKeywords: parsedResponse.suggestedKeywords || [],
+          niche: parsedResponse.niche || '',
+          language: parsedResponse.language || 'en',
+          targetAudience: parsedResponse.targetAudience || 'Personal bloggers and small teams',
+          additionalRequirements: parsedResponse.additionalRequirements || '',
+          agentName: parsedResponse.agentName || '',
+          agentDescription: parsedResponse.agentDescription || '',
+        },
+      });
+    } catch (error) {
+      logger.error('Error generating from objective:', { error: getErrorMessage(error) });
+      res.status(500).json({
+        success: false,
+        error: 'Failed to analyze objective',
+        message: getErrorMessage(error),
+      });
+    }
+  }
+
+  /**
    * Generate a Firecrawl prompt using OpenAI based on user's simple inputs
    */
   async generatePrompt(req: Request, res: Response): Promise<void> {
@@ -53,6 +157,7 @@ The prompt should be structured for an AI web research agent and include:
 3. Criteria for filtering and validating blogs
 4. Instructions on how to search effectively (use search engines, browse directories, etc.)
 5. Be detailed enough to find quality results
+6. IMPORTANT: For each potential blog found, the agent MUST check the traffic using this API: http://hatoltd.com/wp-json/api/seo-traffic?domain=[BLOG_DOMAIN] (replace [BLOG_DOMAIN] with the actual domain, e.g., example.com). Include the traffic data in the results.
 
 For the agent name: Create a concise, descriptive name (max 50 chars) that captures the search focus.
 For the agent description: Create a brief description (max 100 chars) explaining what this agent does.
@@ -85,7 +190,7 @@ Return ONLY valid JSON with this structure:
 ${additionalRequirements ? `- Additional Requirements: ${additionalRequirements}` : ''}${seoreviewtoolsInstructions}
 
 Create a JSON response with:
-1. prompt: Detailed instructions for an AI web research agent. The agent should: (a) Search for WordPress blogs in the specified niche using search engines and blog directories, (b) Visit promising websites, (c) Extract structured data from each blog including blog name, URL, contact email, contact form link, topics/categories, (d) Only include blogs that are clearly WordPress sites with contact information available, (e) Focus on individual bloggers and small teams, not corporate sites, (f) Return results in the specified JSON format.${seoreviewtoolsApiKey ? ' Additionally, the agent can use the SEOReviewTools API (API key provided below) to get SEO metrics, domain age, and traffic estimates for discovered websites. Include this capability in the prompt.' : ''}
+1. prompt: Detailed instructions for an AI web research agent. The agent should: (a) Search for WordPress blogs in the specified niche using search engines and blog directories, (b) Visit promising websites, (c) Extract structured data from each blog including blog name, URL, contact email, contact form link, topics/categories, (d) Only include blogs that are clearly WordPress sites with contact information available, (e) Focus on individual bloggers and small teams, not corporate sites, (f) For EACH blog found, check the traffic by calling this API: http://hatoltd.com/wp-json/api/seo-traffic?domain=[BLOG_DOMAIN] (replace [BLOG_DOMAIN] with the blog's domain like example.com). Include the traffic data (monthly_visits, organic_traffic, etc.) in the results, (g) Return results in the specified JSON format with traffic data included.${seoreviewtoolsApiKey ? ' Additionally, the agent can use the SEOReviewTools API (API key provided below) to get SEO metrics, domain age, and traffic estimates for discovered websites. Include this capability in the prompt.' : ''}
 2. name: Concise agent name (max 50 chars) like "Anime Blog Hunter" or "Tech Review Finder"
 3. description: Brief description (max 100 chars) like "Discovers Japanese anime blogs for collaboration opportunities"`;
 
@@ -631,6 +736,13 @@ Create a JSON response with:
             existingLead.title = result.blog_name || existingLead.title;
             existingLead.email = result.contact_email || existingLead.email;
             existingLead.niche = Array.isArray(result.topics) ? result.topics.join(', ') : (result.topics || existingLead.niche);
+            // Update traffic info if available
+            if (result.traffic !== undefined) {
+              existingLead.traffic = result.traffic;
+            }
+            if (result.domainAge !== undefined) {
+              existingLead.domainAge = result.domainAge;
+            }
             await existingLead.save();
             savedLeads.push(existingLead);
           } else {
@@ -644,6 +756,8 @@ Create a JSON response with:
               email: result.contact_email,
               isWordPress: result.platform?.toLowerCase().includes('wordpress') ?? true,
               niche: nicheValue,
+              traffic: result.traffic,
+              domainAge: result.domainAge,
               status: 'DISCOVERED',
               tags: [],
               source: `Firecrawl Agent: ${agent.name}`,

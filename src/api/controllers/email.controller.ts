@@ -574,7 +574,7 @@ export class EmailController {
   // ==================== Generate Email ====================
   async generateEmail(req: Request, res: Response): Promise<void> {
     try {
-      const { leadId, templateId, language } = req.body;
+      const { leadId, templateId, language, customInstructions } = req.body;
 
       if (!leadId) {
         res.status(400).json({ error: 'Lead ID is required' });
@@ -607,15 +607,15 @@ export class EmailController {
         }
       }
 
-      // Generate the email using OpenAI with language support
-      const { subject, body } = await openaiService.generatePersonalizedEmail(lead, template, language);
+      // Generate the email using OpenAI with language support and custom instructions
+      const { subject, body } = await openaiService.generatePersonalizedEmail(lead, template, language, customInstructions);
 
       // Increment template usage if a template was used
       if (templateId) {
         await emailService.incrementTemplateUsage(templateId);
       }
 
-      logger.info('Email generated successfully', { leadId, templateId, hasTemplate: !!template, language });
+      logger.info('Email generated successfully', { leadId, templateId, hasTemplate: !!template, language, hasCustomInstructions: !!customInstructions });
 
       res.json({
         success: true,
